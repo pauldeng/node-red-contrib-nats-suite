@@ -10,7 +10,6 @@
       tlsCaFile: { value: "" },
       tlsCertFile: { value: "" },
       tlsKeyFile: { value: "" },
-      maxReconnectAttempts: { value: 10 },
       reconnectTimeWait: { value: 1000 },
       timeout: { value: 10000 },
       pingInterval: { value: 30000 },
@@ -360,12 +359,6 @@
       <div class="nats-section-content">
         <div class="nats-grid">
           <div class="nats-form-row">
-            <label><i class="fa fa-refresh"></i>Max Reconnect Attempts</label>
-            <div class="nats-inline-row">
-              <input type="number" id="node-config-input-maxReconnectAttempts" min="1" max="100" placeholder="10">
-            </div>
-          </div>
-          <div class="nats-form-row">
             <label><i class="fa fa-clock-o"></i>Reconnect Wait</label>
             <div class="nats-inline-row">
               <input type="number" id="node-config-input-reconnectTimeWait" min="100" max="60000" placeholder="1000">
@@ -423,5 +416,5 @@
   <p>Enable TLS for encrypted connections. For mutual TLS (mTLS), provide client certificate and key.</p>
 
   <h3>Reconnection</h3>
-  <p>Automatic exponential backoff: 5s → 10s → 20s → 40s → 60s (max)</p>
+  <p>Retries indefinitely using the native NATS reconnect loop and the configured reconnect wait.</p>
 </script>

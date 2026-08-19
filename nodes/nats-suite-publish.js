@@ -13,7 +13,7 @@ module.exports = function (RED) {
     const enableTopicOverride = !!config.enableTopicOverride;
     const requestTimeout = config.requestTimeout || 5000;
     const requestFallbackToPublish = config.requestFallbackToPublish !== false;
-    const enableAutoReply = !!config.enableAutoReply;
+    const enableAutoReply = mode === 'reply' && !!config.enableAutoReply;
 
     const setStatusRed = () => node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
     const setStatusGreen = () => node.status({ fill: 'green', shape: 'dot', text: 'connected' });

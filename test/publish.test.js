@@ -87,6 +87,74 @@ function completeNode(id, scope, wireTo) {
   return { id, type: 'complete', z: 'FLOW', name: '', scope, wires: [[wireTo]] };
 }
 
+async function collectMessages(sub, count, timeoutMs = 5000) {
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const messages = [];
+        for await (const message of sub) {
+          messages.push(message);
+          if (messages.length === count) return messages;
+        }
+        throw new Error(`Subscription ended before receiving ${count} messages`);
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${count} messages`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    sub.unsubscribe();
+  }
+}
+
+// Keep the subscription open after the first request long enough for the
+// configured request timeout plus an explicit settle window. This makes a
+// no-fallback assertion observe a possible second wire occurrence instead of
+// treating the first message as proof that no fallback happened.
+async function collectMessagesThroughSettle(
+  sub,
+  firstMessageTimeoutMs,
+  settleMs
+) {
+  const messages = [];
+  let firstTimer;
+  let settleTimer;
+  let finish;
+  const finished = new Promise(resolve => {
+    finish = resolve;
+  });
+  const collecting = (async () => {
+    for await (const message of sub) {
+      messages.push(message);
+      if (messages.length === 1) {
+        settleTimer = setTimeout(finish, settleMs);
+      } else {
+        clearTimeout(settleTimer);
+        finish();
+        return;
+      }
+    }
+  })();
+
+  try {
+    const firstMessage = new Promise((_, reject) => {
+      firstTimer = setTimeout(
+        () => reject(new Error(`Timed out after ${firstMessageTimeoutMs}ms waiting for the first message`)),
+        firstMessageTimeoutMs
+      );
+    });
+    await Promise.race([finished, collecting, firstMessage]);
+    return messages;
+  } finally {
+    clearTimeout(firstTimer);
+    clearTimeout(settleTimer);
+    sub.unsubscribe();
+    await collecting.catch(() => {});
+  }
+}
+
 // --- Shared setup / teardown ----------------------------------------------
 
 // Skips (does not fail) when Docker itself is unavailable; any other startup
@@ -245,7 +313,7 @@ for (const c of subjectCases) {
 
 // --- 3. Request/reply -------------------------------------------------------
 
-test('publish: mode "request" emits the responder\'s reply on its output', async (t) => {
+test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignored outside Reply mode', async (t) => {
   if (!(await checkStack(t))) return;
 
   const id = uid('req-ok-');
@@ -262,6 +330,7 @@ test('publish: mode "request" emits the responder\'s reply on its output', async
       server: srv,
       mode: 'request',
       datapointid: subject,
+      enableAutoReply: true,
       requestTimeout: 5000,
       outputs: 1,
       wires: [[dbg]],
@@ -294,6 +363,73 @@ test('publish: mode "request" emits the responder\'s reply on its output', async
     const debugMsg = await debugCaught;
 
     assert.deepEqual(debugMsg.payload, { ok: true, echoed: probe });
+  } finally {
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: auto-reply forwards a service request and publishes the processed response back to its reply subject', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('auto-reply-');
+  const subject = `test.publish.auto-reply.${id}`;
+  const srv = `${id}srv`;
+  const sub = `${id}sub`;
+  const pub = `${id}pub`;
+  const fn = `${id}fn`;
+
+  const nodes = [
+    serverNode(srv),
+    {
+      id: sub,
+      type: 'nats-suite-subscribe',
+      z: 'FLOW',
+      name: '',
+      server: srv,
+      debug: false,
+      dataformat: 'string',
+      datapointid: subject,
+      subscriptionMode: 'static',
+      queueGroup: '',
+      wires: [[pub]],
+    },
+    publishNode(pub, {
+      server: srv,
+      mode: 'reply',
+      dataformat: 'string',
+      enableAutoReply: true,
+      outputs: 1,
+      wires: [[fn]],
+    }),
+    {
+      id: fn,
+      type: 'function',
+      z: 'FLOW',
+      name: 'process service request',
+      func: "msg.payload = `handled:${msg.payload}`; return msg;",
+      outputs: 1,
+      noerr: 0,
+      initialize: '',
+      finalize: '',
+      libs: [],
+      wires: [[pub]],
+    },
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const publishReady = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const serviceReady = comms.waitForStatus(sub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await Promise.all([publishReady, serviceReady]);
+
+    const response = await directNc.request(subject, new TextEncoder().encode('request'), { timeout: 5000 });
+    assert.equal(new TextDecoder().decode(response.data), 'handled:request');
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
@@ -334,6 +470,7 @@ test('publish: requestTimeout with requestFallbackToPublish=false surfaces an er
   // means nothing at all is listening on the subject).
   const comms = connectComms();
   const directNc = await connectDirectNats();
+  let subjectSub;
   let flowId;
   try {
     await comms.ready;
@@ -341,18 +478,20 @@ test('publish: requestTimeout with requestFallbackToPublish=false surfaces an er
     flowId = await deployFlow(nodes);
     await connected;
 
-    const silentSub = subscribeOnce(directNc, subject, 5000);
+    subjectSub = directNc.subscribe(subject);
+    const observed = collectMessagesThroughSettle(subjectSub, 5000, 750);
     const debugCaught = comms.waitForDebug(dbg, 5000);
     const errorStatus = comms.waitForStatus(pub, (d) => d.fill !== 'green', 5000);
     await triggerInject(inj);
-    await silentSub.catch(() => {});
+    const [received, debugMsg, status] = await Promise.all([observed, debugCaught, errorStatus]);
 
-    const [debugMsg, status] = await Promise.all([debugCaught, errorStatus]);
-
+    assert.ok(received[0].reply, 'the persistent subscriber should observe the original request first');
+    assert.equal(received.length, 1, 'no fallback publish should occur after the request timeout is handled');
     assert.equal(debugMsg.error.code, 'TIMEOUT', 'msg.error should record a timeout, not a fallback');
     assert.equal(debugMsg.fallback, undefined, 'no fallback publish should have happened');
     assert.notEqual(status.fill, 'green', 'node status should show a non-connected/error state on timeout');
   } finally {
+    if (subjectSub) subjectSub.unsubscribe();
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
     await directNc.close().catch(() => {});
@@ -387,6 +526,7 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
 
   const comms = connectComms();
   const directNc = await connectDirectNats();
+  let subjectSub;
   let flowId;
   try {
     await comms.ready;
@@ -394,20 +534,25 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
     flowId = await deployFlow(nodes);
     await connected;
 
-    // Nobody responds; after requestTimeout the node should instead publish
-    // the same payload to `subject` as a plain message.
-    const fallbackDelivered = subscribeOnce(directNc, subject, 5000);
+    // The persistent subscriber sees the request first and the fallback
+    // publish second; the reply field distinguishes the two wire messages.
+    subjectSub = directNc.subscribe(subject);
+    const fallbackDelivered = collectMessages(subjectSub, 2, 5000);
     const debugCaught = comms.waitForDebug(dbg, 5000);
     const backToGreen = comms.waitForStatus(pub, (d) => d.fill === 'green', 5000);
 
     await triggerInject(inj);
 
-    const [wirePayload, debugMsg] = await Promise.all([fallbackDelivered, debugCaught, backToGreen]);
+    const [messages, debugMsg] = await Promise.all([fallbackDelivered, debugCaught, backToGreen]);
 
-    assert.equal(wirePayload, probe, 'fallback publish should carry the original request payload');
+    assert.equal(messages.length, 2, 'fallback should produce a second wire message after the original request');
+    assert.ok(messages[0].reply, 'the first wire message should be the request');
+    assert.equal(messages[1].reply, '', 'the second wire message should be the fallback publish');
+    assert.equal(new TextDecoder().decode(messages[1].data), probe, 'fallback publish should carry the original request payload');
     assert.equal(debugMsg.fallback, 'publish');
     assert.equal(debugMsg.error, undefined, 'fallback success should not leave msg.error set');
   } finally {
+    if (subjectSub) subjectSub.unsubscribe();
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
     await directNc.close().catch(() => {});
@@ -542,14 +687,8 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
     flowId = await deployFlow(nodes);
     await connected;
 
-    const delivered = subscribeOnce(directNc, subject, 8000).then(
-      (v) => { console.log('DIAG delivered OK', v); return v; },
-      (e) => { console.log('DIAG delivered FAILED', e.message); throw e; }
-    );
-    const completed = comms.waitForDebug(dbg, 8000).then(
-      (v) => { console.log('DIAG debug OK', JSON.stringify(v)); return v; },
-      (e) => { console.log('DIAG debug FAILED', e.message); throw e; }
-    );
+    const delivered = subscribeOnce(directNc, subject, 8000);
+    const completed = comms.waitForDebug(dbg, 8000);
     await triggerInject(inj);
 
     const [wirePayload, completeMsg] = await Promise.all([delivered, completed]);

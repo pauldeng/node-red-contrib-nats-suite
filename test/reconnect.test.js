@@ -14,11 +14,9 @@
 //      stream-consumer (JetStream pull consumer - the highest-risk case).
 //   7. A subscription established before the outage survives it.
 //   8. No unhandled rejection / crash in the Node-RED container.
-//   9. Deleting a flow while the broker is down still completes promptly.
 //
-// The whole suite deploys exactly two flows and cycles the broker down/up a
-// bounded number of times (1 cold-start + 3 repeated cycles) to keep runtime
-// sane - see the top-level test's comment for the docker-cycle budget.
+// The suite deploys one flow while the broker is down, then cycles that same
+// flow through broker outages (1 cold-start + 3 repeated cycles).
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -62,11 +60,10 @@ const killNats = () => compose(['kill', 'nats-server']);
 // Waits for the broker's HTTP monitor to actually answer, not just for
 // `docker compose up` to return - a (re)started container needs a moment
 // before it accepts connections, and `nats2.connect({waitOnFirstConnect:
-// false})` does NOT retry its *first* dial regardless of maxReconnectAttempts
-// (that option only governs reconnection after an initial connect succeeds -
-// verified the hard way while writing this file, see report). Every caller
-// of startNats() gets this for free instead of each needing its own retry
-// dance.
+// false})` does NOT retry its first dial; the server config owns the
+// cancellable acquisition retry until the first connection succeeds. Every
+// caller of startNats() gets this for free instead of each needing its own
+// retry dance.
 async function waitForNatsUp(timeoutMs = 20000) {
   const port = process.env.NATS_HTTP_PORT || 8222;
   const deadline = Date.now() + timeoutMs;
@@ -86,6 +83,21 @@ async function startNats() {
   compose(['up', '-d', 'nats-server']);
   await waitForNatsUp();
 }
+function bounded(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    Promise.resolve(promise).then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      err => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 const noderedLogsSince = since =>
   execFileSync(
     'docker',
@@ -98,46 +110,6 @@ const noderedLogsSince = since =>
 
 // --- JetStream admin (stream setup only - not the thing under test) ------
 
-// Deletes any pre-existing stream of this name first: a leftover stream from
-// an earlier run (or from a different storage type) would otherwise make
-// `streams.add` a silent no-op and desync this run's expectations from what
-// is actually on disk (verified the hard way - see report).
-async function freshFileStream(name, subject) {
-  // Generous retry budget (unlike harness.connectDirectNats's fail-fast
-  // default): this is called right after startNats(), before anything has
-  // confirmed the container is actually accepting connections yet, and a
-  // freshly (re)started container needs a couple of seconds.
-  const nc = await nats2.connect({
-    servers: NATS_URL,
-    tls: null,
-    waitOnFirstConnect: false,
-    maxReconnectAttempts: 20,
-    reconnectTimeWait: 500,
-  });
-  try {
-    const jsm = await nc.jetstreamManager();
-    await jsm.streams.delete(name).catch(() => {});
-    await jsm.streams.add({
-      name,
-      subjects: [subject],
-      retention: 'limits',
-      // file, not memory: a memory-backed stream's messages (and sequence
-      // counter) are wiped by the very container restart this suite
-      // performs, which would make "did the message survive" indistinguishable
-      // from "did the stream get wiped" - file storage is what a real
-      // durability-seeking JetStream user would configure anyway.
-      storage: 'file',
-      max_msgs: 1000,
-      max_bytes: 10 * 1024 * 1024,
-      max_age: 0,
-      duplicate_window: 0,
-      num_replicas: 1,
-    });
-  } finally {
-    await nc.close();
-  }
-}
-
 async function deleteStream(name) {
   // Generous retry budget (unlike harness.connectDirectNats's fail-fast
   // default): this is called right after startNats(), before anything has
@@ -147,7 +119,6 @@ async function deleteStream(name) {
     servers: NATS_URL,
     tls: null,
     waitOnFirstConnect: false,
-    maxReconnectAttempts: 20,
     reconnectTimeWait: 500,
   });
   try {
@@ -280,7 +251,9 @@ const streamConsumerNode = (
   filterSubject: subject,
   consumerType: 'pull',
   ackPolicy: 'none',
-  deliverPolicy: 'new',
+  // The flow is deployed before its stream exists. "all" lets the consumer
+  // still observe the first message if stream creation wins the startup race.
+  deliverPolicy: 'all',
   ackWait: '30s',
   maxDeliver: 5,
   maxAckPending: 1000,
@@ -321,6 +294,7 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
   const scon = `${runId}-scon`;
   const sconDbg = `${runId}-scondbg`;
   const sconInj = `${runId}-sconinj`;
+  const pendingCloseSrv = `${runId}-pending-close-srv`;
 
   // All five node types under coverage requirement 6, table-driven so the
   // per-type checks below (cold-start-red, then connected-green) are one
@@ -334,14 +308,15 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
   ];
 
   const comms = connectComms();
-  let flowAId, flowBId;
+  let flowAId;
+  let pendingFlowId;
   const startedAt = new Date();
 
   try {
     await comms.ready;
 
     // ======================================================================
-    // Phase 1 - broker down from the start. Covers claims 1 and 9.
+    // Phase 1 - broker down from the start. Covers claim 1.
     // ======================================================================
     await t.test(
       '1. cold start with broker down -> every node type shows red/ring, runtime stays up',
@@ -349,7 +324,7 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
         stopNats();
 
         const flowANodes = [
-          serverNode(srv, { maxReconnectAttempts: 60, reconnectTimeWait: 500 }),
+          serverNode(srv, { reconnectTimeWait: 500 }),
           publishNode(pub, srv, pubSubject),
           subscribeNode(sub, srv, coreSubject, subDbg),
           debugNode(subDbg),
@@ -364,6 +339,9 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
             sconDbg
           ),
           debugNode(sconDbg),
+          injectNode(pubInj, pub),
+          injectNode(spubInj, spub),
+          injectNode(sconInj, scon),
         ];
 
         // Register every waiter before deploying: node construction for all
@@ -397,68 +375,36 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
           res.ok,
           'Node-RED admin API must stay responsive with the broker down at deploy time'
         );
-      }
-    );
 
-    await t.test(
-      '9. deleting a flow while the broker is still down completes without hanging',
-      async () => {
-        const t0 = Date.now();
-        const DEADLINE_MS = 10000;
-        await Promise.race([
-          deleteFlow(flowAId),
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error('deleteFlow did not resolve')),
-              DEADLINE_MS
-            )
-          ),
+        // A disposable config node proves that deleting a node whose initial
+        // dial is still retrying completes without waiting for the broker.
+        pendingFlowId = await deployFlow([
+          serverNode(pendingCloseSrv, { reconnectTimeWait: 500 }),
         ]);
-        flowAId = null;
-        const elapsed = Date.now() - t0;
-        assert.ok(
-          elapsed < DEADLINE_MS,
-          `close handlers must not hang during an outage (took ${elapsed}ms)`
+        const started = Date.now();
+        await bounded(
+          deleteFlow(pendingFlowId),
+          10000,
+          'pending-dial close did not resolve'
         );
+        pendingFlowId = null;
+        assert.ok(Date.now() - started < 10000, 'pending-dial close must be bounded');
       }
     );
 
     // ======================================================================
-    // Phase 2 - bring the broker up, deploy the flow used for the rest of
-    // the suite. It is deployed exactly once; every later phase reuses it,
-    // which is itself the proof of "no redeploy needed" (claim 4/7).
+    // Phase 2 - bring the broker up. The flow was deployed while it was down;
+    // every later phase reuses that same flow, proving recovery without a
+    // redeploy.
     // ======================================================================
     await t.test(
-      '2. broker comes up -> every node type shows green',
+      '2. broker comes up -> the already-deployed flow shows green',
       async () => {
         await startNats();
-        await freshFileStream(streamName, jsSubject);
-
-        const flowBNodes = [
-          serverNode(srv, { maxReconnectAttempts: 60, reconnectTimeWait: 500 }),
-          publishNode(pub, srv, pubSubject),
-          injectNode(pubInj, pub),
-          subscribeNode(sub, srv, coreSubject, subDbg),
-          debugNode(subDbg),
-          streamPublisherNode(spub, srv, streamName, jsSubject, spubDbg),
-          debugNode(spubDbg),
-          injectNode(spubInj, spub),
-          streamConsumerNode(
-            scon,
-            srv,
-            streamName,
-            consumerName,
-            jsSubject,
-            sconDbg
-          ),
-          debugNode(sconDbg),
-          injectNode(sconInj, scon),
-        ];
 
         const waiters = nodeTypes.map(({ id }) =>
           comms.waitForStatus(id, d => d.fill === 'green', 45000)
         );
-        flowBId = await deployFlow(flowBNodes);
         const results = await Promise.all(waiters);
 
         results.forEach((d, i) => {
@@ -554,20 +500,12 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
         `cycle ${cycle}/${CYCLES}: kill -> non-green -> restart -> green + messages resume, no redeploy`,
         async () => {
           // --- kill: claim 3 --------------------------------------------------
-          // Stream-consumer excluded from this specific mid-outage check: its
-          // idle-timeout status update (fires 2s after the last processed
-          // message, unconditionally) can race a disconnect and repaint green
-          // right after it - a real quirk found while probing this suite, not
-          // a flaky assertion. Its recovery is still proven functionally below.
-          const nonGreenTypes = nodeTypes.filter(
-            n => n.label !== 'stream-consumer'
-          );
           // Both sets of waiters are registered up front, before killNats(), so
           // a fast transition can't be missed - and so that a failure in the
           // non-green assertions below still leaves startNats() reachable via
           // the finally, instead of stranding the broker down for every
           // subsequent cycle (a real failure mode hit while writing this file).
-          const nonGreenWaiters = nonGreenTypes.map(({ id }) =>
+          const nonGreenWaiters = nodeTypes.map(({ id }) =>
             comms.waitForStatus(id, d => d.fill !== 'green', 10000)
           );
           const greenWaiters = nodeTypes.map(({ id }) =>
@@ -581,12 +519,12 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
               assert.notEqual(
                 d.fill,
                 'green',
-                `cycle ${cycle}: ${nonGreenTypes[i].label} must leave green when the broker is killed`
+                `cycle ${cycle}: ${nodeTypes[i].label} must leave green when the broker is killed`
               );
               assert.equal(
                 d.shape,
                 'ring',
-                `cycle ${cycle}: ${nonGreenTypes[i].label} non-green status should be shape=ring`
+                `cycle ${cycle}: ${nodeTypes[i].label} non-green status should be shape=ring`
               );
             });
           } finally {
@@ -621,6 +559,21 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
     );
 
     await t.test(
+      '6. deleting the established flow while the broker is down is bounded',
+      async () => {
+        killNats();
+        const started = Date.now();
+        await bounded(
+          deleteFlow(flowAId),
+          10000,
+          'established close did not resolve'
+        );
+        flowAId = null;
+        assert.ok(Date.now() - started < 10000, 'established close must be bounded');
+      }
+    );
+
+    await t.test(
       '8. no unhandled rejection / crash in the Node-RED container after all outages',
       async () => {
         const logs = noderedLogsSince(startedAt.toISOString());
@@ -639,7 +592,7 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
     );
   } finally {
     if (flowAId) await deleteFlow(flowAId).catch(() => {});
-    if (flowBId) await deleteFlow(flowBId).catch(() => {});
+    if (pendingFlowId) await deleteFlow(pendingFlowId).catch(() => {});
     await sweepHarnessFlows().catch(() => {});
     comms.close();
     await deleteStream(streamName).catch(() => {});

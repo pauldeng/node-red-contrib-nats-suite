@@ -38,7 +38,6 @@ test('publish -> real NATS -> subscribe round-trip, with connected status', asyn
       authMethod: 'none',
       enableTLS: false,
       tlsRejectUnauthorized: true,
-      maxReconnectAttempts: 10,
       reconnectTimeWait: 1000,
       timeout: 10000,
       pingInterval: 30000,

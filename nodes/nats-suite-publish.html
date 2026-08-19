@@ -45,6 +45,16 @@
         }
       });
 
+      const updateOutputs = () => {
+        const mode = $('#node-input-mode').val();
+        this.outputs = (mode === 'request' ||
+          (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
+      };
+
+      const updateAutoReply = mode => {
+        $('#node-input-enableAutoReply').prop('disabled', mode !== 'reply');
+      };
+
       // Mode configuration - affects outputs and visibility
       $('#node-input-mode').on('change', function() {
         const mode = $(this).val();
@@ -64,26 +74,23 @@
           $('#subject-row').slideDown(200);
           $('#topic-override-row').slideDown(200);
         }
+        updateAutoReply(mode);
+        updateOutputs();
       });
 
-      // Initialize outputs based on current mode
-      const currentMode = this.mode || 'publish';
-      this.outputs = (currentMode === 'request') ? 1 : 0;
+      $('#node-input-enableAutoReply').on('change', updateOutputs);
 
       // Trigger initial state
       $('#node-input-mode').trigger('change');
       $('#node-input-enableHeaders').trigger('change');
+      $('#node-input-enableAutoReply').trigger('change');
     },
 
     oneditsave: function() {
       const mode = $('#node-input-mode').val();
       
-      // Set the number of outputs based on the subscription mode
-      if (mode === 'publish'|| mode === 'reply') {
-        this.outputs = 0;
-      } else {
-        this.outputs = 1;
-      }
+      this.outputs = (mode === 'request' ||
+        (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
     }
   });
 </script>
@@ -389,10 +396,10 @@
 
         <div class="nats-checkbox-row">
           <input type="checkbox" id="node-input-enableAutoReply">
-          <label for="node-input-enableAutoReply"><i class="fa fa-reply"></i>Auto-Reply (service side)</label>
+          <label for="node-input-enableAutoReply"><i class="fa fa-reply"></i>Auto-Reply (Reply mode only)</label>
         </div>
         <div class="nats-hint" style="margin-left: 24px;">
-          Forwards the incoming message to the output for processing, then publishes the returned message back as a reply.
+          In Reply mode, forwards the incoming message to the output for processing, then publishes the returned message back as a reply.
         </div>
       </div>
     </div>
@@ -484,7 +491,7 @@ msg.requestTime = 45; // ms
 msg.error = { message: "Request timeout", code: "TIMEOUT" };</pre>
 
   <h4>Auto-Reply Handler (Service Side)</h4>
-  <p>For building services: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published normally using the configured mode/subject instead of being forwarded again.</p>
+  <p>For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.</p>
 
   <h3>Subject Wildcards</h3>
   <ul>

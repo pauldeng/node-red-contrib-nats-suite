@@ -195,7 +195,7 @@ function connectComms() {
 // Standard nats-suite-server config, shared by every test file that needs one
 // deployed alongside the node(s) under test. Matches the fields exercised in
 // smoke.test.js; callers override only what a given test needs to vary
-// (e.g. maxReconnectAttempts: 0 to prove a cold-start-with-broker-down case).
+// (e.g. reconnectTimeWait: 500 to shorten a recovery check).
 function serverNode(id, overrides = {}) {
   return {
     id,
@@ -204,7 +204,6 @@ function serverNode(id, overrides = {}) {
     authMethod: 'none',
     enableTLS: false,
     tlsRejectUnauthorized: true,
-    maxReconnectAttempts: 10,
     reconnectTimeWait: 1000,
     timeout: 10000,
     pingInterval: 30000,

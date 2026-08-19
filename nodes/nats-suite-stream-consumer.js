@@ -42,6 +42,12 @@ module.exports = function (RED) {
     let idleTimeout = null; // Timer for idle status
     const sc = StringCodec();
 
+    const setGreenStatus = (text, shape = 'dot') => {
+      if (node.serverConfig.connectionStatus !== 'connected') return false;
+      node.status({ fill: 'green', shape, text });
+      return true;
+    };
+
     // Output configuration
     const isDebug = !!config.debug;
     const parseMode = config.dataformat || 'auto';
@@ -177,11 +183,7 @@ module.exports = function (RED) {
           }
         }
 
-        node.status({
-          fill: 'green',
-          shape: 'dot',
-          text: `${config.consumerName} (ready)`,
-        });
+        setGreenStatus(`${config.consumerName} (ready)`);
         return true;
       } catch (err) {
         node.error(`Failed to ensure consumer: ${err.message}`);
@@ -377,13 +379,8 @@ module.exports = function (RED) {
 
         // Set timeout to change to idle status after 2 seconds
         idleTimeout = setTimeout(() => {
-          if (!isConsuming && !isPaused) {
-            node.status({
-              fill: 'green',
-              shape: 'ring',
-              text: `${config.consumerName} (idle)`,
-            });
-          }
+          if (!isConsuming && !isPaused)
+            setGreenStatus(`${config.consumerName} (idle)`, 'ring');
           idleTimeout = null;
         }, 2000);
       } catch (err) {
@@ -434,11 +431,7 @@ module.exports = function (RED) {
           node.log(`[STREAM CONSUMER] Processed ${count} messages`);
         } else if (!isPaused) {
           // No messages found after timeout, change to idle status (green)
-          node.status({
-            fill: 'green',
-            shape: 'ring',
-            text: `${config.consumerName} (idle)`,
-          });
+          setGreenStatus(`${config.consumerName} (idle)`, 'ring');
         }
       } catch (err) {
         if (err.message && !err.message.includes('timeout')) {
@@ -465,11 +458,7 @@ module.exports = function (RED) {
 
       switch (status) {
         case 'connected':
-          node.status({
-            fill: 'green',
-            shape: 'dot',
-            text: `${config.consumerName} (ready)`,
-          });
+          setGreenStatus(`${config.consumerName} (ready)`);
           break;
         case 'disconnected':
           node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
@@ -504,7 +493,7 @@ module.exports = function (RED) {
               config: streamInfo.config,
               state: streamInfo.state,
             };
-            node.status({ fill: 'green', shape: 'dot', text: streamName });
+            setGreenStatus(streamName);
             break;
           }
 
@@ -515,11 +504,7 @@ module.exports = function (RED) {
               stream: streamName,
               success: true,
             };
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `deleted: ${streamName}`,
-            });
+            setGreenStatus(`deleted: ${streamName}`);
             break;
           }
 
@@ -531,11 +516,7 @@ module.exports = function (RED) {
               stream: streamName,
               success: true,
             };
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `purged: ${streamName}`,
-            });
+            setGreenStatus(`purged: ${streamName}`);
             break;
           }
 
@@ -619,11 +600,7 @@ module.exports = function (RED) {
               consumer: createdConsumer.name,
               success: true,
             };
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `created: ${createdConsumer.name}`,
-            });
+            setGreenStatus(`created: ${createdConsumer.name}`);
             break;
           }
 
@@ -640,7 +617,7 @@ module.exports = function (RED) {
               delivered: consumerInfo.delivered,
               ack_pending: consumerInfo.ack_pending,
             };
-            node.status({ fill: 'green', shape: 'dot', text: consumerName });
+            setGreenStatus(consumerName);
             break;
           }
 
@@ -651,11 +628,7 @@ module.exports = function (RED) {
               consumer: consumerName,
               success: true,
             };
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `deleted: ${consumerName}`,
-            });
+            setGreenStatus(`deleted: ${consumerName}`);
             break;
           }
 
@@ -671,11 +644,7 @@ module.exports = function (RED) {
             msg.payload = consumers;
             msg.operation = 'list';
             msg.count = consumers.length;
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `${consumers.length} consumers`,
-            });
+            setGreenStatus(`${consumers.length} consumers`);
             break;
           }
 
@@ -706,11 +675,7 @@ module.exports = function (RED) {
               success: true,
               paused: false,
             };
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: `${consumerName} (resumed)`,
-            });
+            setGreenStatus(`${consumerName} (resumed)`);
             node.log(`[STREAM CONSUMER] Consumer resumed: ${consumerName}`);
             break;
           }

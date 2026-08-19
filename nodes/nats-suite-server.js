@@ -75,7 +75,6 @@ module.exports = function (RED) {
       const statusInfo = {
         status: this.connectionStatus,
         reconnectAttempts: this.connectionStats.reconnectAttempts,
-        maxReconnectAttempts: this.connectionStats.maxReconnectAttempts,
         uptime: this.getUptime(),
         uptimeFormatted: this.formatUptime(this.getUptime()),
         lastConnected: this.connectionStats.lastConnected,
@@ -112,7 +111,6 @@ module.exports = function (RED) {
     // Connection tracking
     this.connectionStats = {
       reconnectAttempts: 0,
-      maxReconnectAttempts: n.maxReconnectAttempts || 10,
       lastConnected: null,
       lastDisconnected: null,
       totalUptime: 0,
@@ -291,80 +289,123 @@ module.exports = function (RED) {
       }
     };
 
+    let closing = false;
+    let retryTimer = null;
+    let retryWake = null;
+    let cancelDial = null;
+    const closeError = () => new Error('NATS server node is closing');
+    const waitForRetry = () => {
+      if (closing) return Promise.reject(closeError());
+      return new Promise(resolve => {
+        retryWake = resolve;
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          retryWake = null;
+          resolve();
+        }, ConnectionOptions.reconnectTimeWait);
+      });
+    };
+
     const connectNats = async () => {
-      try {
-        this.connectionStatus = 'connecting';
-        this.connectionStats.reconnectAttempts++;
-        this.emitStatusChange();
-
-        // Start connection timeout warning
-        const connectionStartTime = Date.now();
-        const connectionTimeout = setTimeout(() => {
-          const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
-          if (isDebug) this.log(`[NATS] WARNING: Connection attempt taking longer than expected (${elapsed}s)`);
-          this.warn(`NATS connection attempt taking longer than expected (${elapsed}s). Check server availability.`);
-        }, 10000);
-
-        // Log connection attempt with auth method and TLS info
-        let authInfo = 'no authentication';
-        switch (this.authMethod) {
-          case 'userpass':
-            authInfo = this.user ? `username/password (user: ***)` : 'no authentication';
-            break;
-          case 'token':
-            authInfo = this.token ? 'token authentication (***)' : 'no authentication';
-            break;
-          case 'jwt':
-            authInfo = this.jwt ? 'JWT authentication (***+***)' : 'no authentication';
-            break;
-          case 'nkey':
-            authInfo = this.nkeySeed ? 'NKey authentication (***)' : 'no authentication';
-            break;
-        }
-
-        const tlsInfo = this.enableTLS ? 'with TLS/SSL' : 'without TLS';
-
-        if (isDebug) {
-          this.log(`[NATS] Connection attempt ${this.connectionStats.reconnectAttempts}:`);
-          this.log(`  - Servers: ${servers.join(', ')}`);
-          this.log(`  - Auth: ${authInfo}`);
-          this.log(`  - Security: ${tlsInfo}`);
-          this.log(`  - Timeout: ${n.timeout || 10000}ms`);
-        }
-
+      while (!closing) {
         try {
-          this.connection = await connect(ConnectionOptions);
-        } finally {
-          clearTimeout(connectionTimeout);
+          this.connectionStatus = 'connecting';
+          this.connectionStats.reconnectAttempts++;
+          this.emitStatusChange();
+
+          // Start connection timeout warning
+          const connectionStartTime = Date.now();
+          const connectionTimeout = setTimeout(() => {
+            const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
+            if (isDebug) this.log(`[NATS] WARNING: Connection attempt taking longer than expected (${elapsed}s)`);
+            this.warn(`NATS connection attempt taking longer than expected (${elapsed}s). Check server availability.`);
+          }, 10000);
+
+          // Log connection attempt with auth method and TLS info
+          let authInfo = 'no authentication';
+          switch (this.authMethod) {
+            case 'userpass':
+              authInfo = this.user ? `username/password (user: ***)` : 'no authentication';
+              break;
+            case 'token':
+              authInfo = this.token ? 'token authentication (***)' : 'no authentication';
+              break;
+            case 'jwt':
+              authInfo = this.jwt ? 'JWT authentication (***+***)' : 'no authentication';
+              break;
+            case 'nkey':
+              authInfo = this.nkeySeed ? 'NKey authentication (***)' : 'no authentication';
+              break;
+          }
+
+          const tlsInfo = this.enableTLS ? 'with TLS/SSL' : 'without TLS';
+
+          if (isDebug) {
+            this.log(`[NATS] Connection attempt ${this.connectionStats.reconnectAttempts}:`);
+            this.log(`  - Servers: ${servers.join(', ')}`);
+            this.log(`  - Auth: ${authInfo}`);
+            this.log(`  - Security: ${tlsInfo}`);
+            this.log(`  - Timeout: ${n.timeout || 10000}ms`);
+          }
+
+          try {
+            const dial = connect(ConnectionOptions);
+            // nats.connect() has no abort signal. Race it with close so the
+            // Node-RED close callback never waits on a dead broker, and close
+            // any late connection if the dial wins after shutdown.
+            cancelDial = null;
+            const cancelled = new Promise((_, reject) => {
+              cancelDial = () => reject(closeError());
+            });
+            dial.then(connection => {
+              if (closing) connection.close().catch(() => {});
+            }, () => {});
+            const connection = await Promise.race([dial, cancelled]);
+            if (closing) {
+              await connection.close();
+              throw closeError();
+            }
+            this.connection = connection;
+            scheduleDeferredClose();
+          } finally {
+            cancelDial = null;
+            clearTimeout(connectionTimeout);
+          }
+          if (isDebug) this.log(`[NATS] Connection established successfully!`);
+
+          // Start the lifecycle watcher once for this connection object; it runs for as long as
+          // the connection lives (native reconnect keeps it alive across drops).
+          (async () => {
+            try {
+              await watchConnectionStatus(this.connection);
+            } catch (err) {
+              if (isDebug) this.log(`[NATS] Status iterator ended: ${err.message}`);
+            }
+          })();
+
+          this.connectionStatus = 'connected';
+          this.connectionStats.lastConnected = Date.now();
+          this.connectionStats.connectionStartTime = Date.now();
+          this.connectionStats.reconnectAttempts = 0; // Reset counter on successful connection
+          this.emitStatusChange();
+
+          return this.connection;
+        } catch (err) {
+          if (isDebug) this.log(`[NATS] Connection failed with error: ${err.message}`);
+          if (isDebug) this.log(`[NATS] Error details:`, {
+            name: err.name,
+            code: err.code,
+            stack: err.stack?.split('\n')[0]
+          });
+
+          this.connectionStatus = 'disconnected';
+          this.connectionStats.lastDisconnected = Date.now();
+          this.emitStatusChange();
+          if (closing) throw err;
+          await waitForRetry();
         }
-        if (isDebug) this.log(`[NATS] Connection established successfully!`);
-
-        // Start the lifecycle watcher once for this connection object; it runs for as long as
-        // the connection lives (native reconnect keeps it alive across drops).
-        watchConnectionStatus(this.connection).catch(err => {
-          if (isDebug) this.log(`[NATS] Status iterator ended: ${err.message}`);
-        });
-
-        this.connectionStatus = 'connected';
-        this.connectionStats.lastConnected = Date.now();
-        this.connectionStats.connectionStartTime = Date.now();
-        this.connectionStats.reconnectAttempts = 0; // Reset counter on successful connection
-        this.emitStatusChange();
-
-        return this.connection;
-      } catch (err) {
-        if (isDebug) this.log(`[NATS] Connection failed with error: ${err.message}`);
-        if (isDebug) this.log(`[NATS] Error details:`, {
-          name: err.name,
-          code: err.code,
-          stack: err.stack?.split('\n')[0]
-        });
-
-        this.connectionStatus = 'disconnected';
-        this.connectionStats.lastDisconnected = Date.now();
-        this.emitStatusChange();
-        throw err;
       }
+      throw closeError();
     };
 
     // Set initial status
@@ -381,9 +422,13 @@ module.exports = function (RED) {
     const connectOnce = () => {
       if (this.connection) return Promise.resolve(this.connection);
       if (!pendingConnect) {
-        pendingConnect = connectNats().finally(() => {
-          pendingConnect = null;
-        });
+        pendingConnect = (async () => {
+          try {
+            return await connectNats();
+          } finally {
+            pendingConnect = null;
+          }
+        })();
       }
       return pendingConnect;
     };
@@ -394,10 +439,15 @@ module.exports = function (RED) {
       return this.connection;
     };
 
-    // Start the initial connection attempt. If it fails, the connection stays null and the
-    // next getConnection() call retries it; once it succeeds, native reconnect (above) takes
-    // over for the lifetime of the connection.
-    connectOnce().catch(() => {}); // failure is already reflected via emitStatusChange()
+    // Start the initial acquisition. It retries until the broker is reachable or this node
+    // closes; native reconnect then owns recovery for the lifetime of the connection.
+    (async () => {
+      try {
+        await connectOnce();
+      } catch {
+        // Failure is already reflected via emitStatusChange().
+      }
+    })();
 
     // Connection Pool: Register a node as user of this connection
     this.registerConnectionUser = (nodeId) => {
@@ -417,6 +467,48 @@ module.exports = function (RED) {
 
     // Connection Pool: Unregister a node as user of this connection
     let deferredCloseTimer = null;
+    let deferredClosePromise = null;
+    const scheduleDeferredClose = () => {
+      if (
+        closing ||
+        this.connectionRefCount !== 0 ||
+        !this.connection ||
+        deferredCloseTimer ||
+        deferredClosePromise
+      ) return;
+
+      if (isDebug) this.log(`[NATS] No more connection users - scheduling connection cleanup in 30s`);
+      deferredCloseTimer = setTimeout(() => {
+        deferredCloseTimer = null;
+        if (this.connectionRefCount !== 0 || !this.connection || closing) return;
+
+        if (isDebug) this.log(`[NATS] Closing unused connection`);
+
+        // Detach before awaiting close so a new user cannot acquire a
+        // connection that is already draining. The close promise stays
+        // owned here until the node close handler has awaited it.
+        const connection = this.connection;
+        this.connection = null;
+        let closePromise;
+        closePromise = (async () => {
+          try {
+            await closeConnection(connection);
+            if (this.connectionRefCount === 0 && !this.connection) {
+              this.connectionStatus = 'disconnected';
+              this.emitStatusChange();
+            }
+          } catch (err) {
+            this.error(`[NATS] Failed to close unused connection: ${err.message}`);
+          } finally {
+            if (deferredClosePromise === closePromise) {
+              deferredClosePromise = null;
+              scheduleDeferredClose();
+            }
+          }
+        })();
+        deferredClosePromise = closePromise;
+      }, 30000);
+    };
     this.unregisterConnectionUser = (nodeId) => {
       if (!nodeId) {
         if (isDebug) this.log(`[NATS] Warning: unregisterConnectionUser called without nodeId`);
@@ -432,27 +524,7 @@ module.exports = function (RED) {
       }
 
       // Automatic cleanup: Close connection if no users left
-      if (this.connectionRefCount === 0 && this.connection) {
-        if (isDebug) this.log(`[NATS] No more connection users - scheduling connection cleanup in 30s`);
-
-        if (deferredCloseTimer) {
-          clearTimeout(deferredCloseTimer);
-        }
-
-        // Wait 30 seconds before closing (in case new nodes are deployed)
-        deferredCloseTimer = setTimeout(() => {
-          deferredCloseTimer = null;
-          if (this.connectionRefCount === 0 && this.connection) {
-            if (isDebug) this.log(`[NATS] Closing unused connection`);
-
-            // Close connection
-            this.connection.close();
-            this.connection = null;
-            this.connectionStatus = 'disconnected';
-            this.emitStatusChange();
-          }
-        }, 30000);
-      }
+      scheduleDeferredClose();
     };
 
     this.addStatusListener = listener => {
@@ -461,7 +533,6 @@ module.exports = function (RED) {
       listener({
         status: this.connectionStatus,
         reconnectAttempts: this.connectionStats.reconnectAttempts,
-        maxReconnectAttempts: this.connectionStats.maxReconnectAttempts,
         uptime: this.getUptime(),
         uptimeFormatted: this.formatUptime(this.getUptime())
       });
@@ -479,28 +550,48 @@ module.exports = function (RED) {
       };
     };
 
+    const closeConnection = async connection => {
+      const bounded = (promise, timeout = 1000) => new Promise(resolve => {
+        const timer = setTimeout(resolve, timeout);
+        Promise.resolve(promise).catch(() => {}).then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      if (!connection || connection.isClosed()) return;
+      await bounded(connection.drain());
+      if (!connection.isClosed()) await bounded(connection.close());
+    };
+
     this.on('close', async (done) => {
       if (isDebug) this.log(`[NATS] Node closing, cleaning up connections...`);
+
+      closing = true;
+      if (cancelDial) cancelDial();
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (retryWake) {
+        const wake = retryWake;
+        retryWake = null;
+        wake();
+      }
+
+      // Let the single-flight acquisition observe closing before completing
+      // node shutdown. A late dial is separately closed by its handler above.
+      if (pendingConnect) await pendingConnect.catch(() => {});
 
       if (deferredCloseTimer) {
         clearTimeout(deferredCloseTimer);
         deferredCloseTimer = null;
       }
+      if (deferredClosePromise) await deferredClosePromise;
 
       // Close NATS connection gracefully - drain flushes pending work before closing;
       // fall back to a hard close if drain itself fails.
-      if (this.connection && !this.connection.isClosed()) {
-        try {
-          await this.connection.drain();
-        } catch (err) {
-          if (isDebug) this.log(`[NATS] Drain failed, forcing close: ${err.message}`);
-          try {
-            await this.connection.close();
-          } catch (closeErr) {
-            if (isDebug) this.log(`[NATS] Close failed: ${closeErr.message}`);
-          }
-        }
-      }
+      const connection = this.connection;
+      await closeConnection(connection);
       this.connection = null;
       this.connectionStatus = 'disconnected';
 
