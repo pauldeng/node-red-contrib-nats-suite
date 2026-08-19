@@ -14,3 +14,4 @@ yarn.lock
 node-red/**
 !node-red/flows.json
 
+.env

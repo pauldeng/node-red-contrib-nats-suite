@@ -12,6 +12,15 @@ const { connect } = require('@nats-io/transport-node');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
+// docker compose reads .env automatically; Node does not. Load it so a bare
+// `npm test` dials the same host ports compose actually published. Missing
+// .env (e.g. CI, where defaults are correct) is not an error.
+try {
+  process.loadEnvFile(path.join(REPO_ROOT, '.env'));
+} catch {
+  /* no .env - defaults apply */
+}
+
 // Reachable from this test process (host). Reachable from *inside* the
 // nodered container is a different address (its own docker network hostname)
 // - see NATS_CONTAINER_URL.
@@ -23,6 +32,7 @@ const NODE_RED_URL = process.env.NODE_RED_URL || `http://localhost:${NODE_RED_PO
 const NATS_URL =
   process.env.NATS_URL || `localhost:${process.env.NATS_CLIENT_PORT || 4222}`;
 const NATS_CONTAINER_URL = process.env.NATS_CONTAINER_URL || 'nats://nats-server:4222';
+const HARNESS_LABEL = 'test-harness';
 
 // --- Docker / compose lifecycle ----------------------------------------
 
@@ -68,6 +78,7 @@ async function ensureStackUp() {
     throw new Error(`docker compose up failed: ${err.message}`, { cause: err });
   }
   await waitForAdminApi();
+  await sweepHarnessFlows().catch(() => {});
   return null;
 }
 
@@ -83,10 +94,22 @@ async function deployFlow(nodes) {
   const res = await fetch(`${NODE_RED_URL}/flow`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: 'harness', label: 'test-harness', nodes }),
+    body: JSON.stringify({ id: 'harness', label: HARNESS_LABEL, nodes }),
   });
   if (!res.ok) throw new Error(`deployFlow failed: HTTP ${res.status} ${await res.text()}`);
   return (await res.json()).id;
+}
+
+// Deletes any 'test-harness' tabs left behind by a previous run. A test process
+// killed mid-run (timeout, SIGINT) never reaches its `finally`, so leaked tabs
+// would otherwise accumulate in the tracked node-red/flows.json forever.
+async function sweepHarnessFlows() {
+  const res = await fetch(`${NODE_RED_URL}/flows`);
+  if (!res.ok) return 0;
+  const flows = await res.json();
+  const stale = flows.filter((n) => n.type === 'tab' && n.label === HARNESS_LABEL);
+  for (const tab of stale) await deleteFlow(tab.id).catch(() => {});
+  return stale.length;
 }
 
 async function deleteFlow(flowId) {
@@ -167,6 +190,30 @@ function connectComms() {
   };
 }
 
+// --- Reusable node-config fragments --------------------------------------
+
+// Standard nats-suite-server config, shared by every test file that needs one
+// deployed alongside the node(s) under test. Matches the fields exercised in
+// smoke.test.js; callers override only what a given test needs to vary
+// (e.g. maxReconnectAttempts: 0 to prove a cold-start-with-broker-down case).
+function serverNode(id, overrides = {}) {
+  return {
+    id,
+    type: 'nats-suite-server',
+    server: NATS_CONTAINER_URL,
+    authMethod: 'none',
+    enableTLS: false,
+    tlsRejectUnauthorized: true,
+    maxReconnectAttempts: 10,
+    reconnectTimeWait: 1000,
+    timeout: 10000,
+    pingInterval: 30000,
+    maxPingOut: 3,
+    debug: false,
+    ...overrides,
+  };
+}
+
 // --- Direct NATS access (the other side of the wire) ---------------------
 
 // Connects to the real NATS server directly from the test process, so a test
@@ -223,6 +270,37 @@ async function subscribeOnce(nc, subject, timeoutMs = 8000) {
   }
 }
 
+// Same wait as subscribeOnce, but resolves with the raw NATS Msg instead of a
+// decoded string - needed whenever a test must inspect wire-level detail
+// subscribeOnce deliberately throws away (headers, exact bytes for a
+// non-UTF8 buffer payload). Kept as a separate function rather than
+// rewriting subscribeOnce in terms of it: subscribeOnce is depended on by
+// smoke.test.js and is not this file's to restructure.
+async function subscribeOnceMsg(nc, subject, timeoutMs = 8000) {
+  const sub = nc.subscribe(subject);
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        for await (const m of sub) return m;
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for a message on "${subject}"`)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    try {
+      sub.unsubscribe();
+    } catch {
+      // already closed - fine
+    }
+  }
+}
+
 module.exports = {
   NODE_RED_URL,
   NATS_URL,
@@ -230,9 +308,12 @@ module.exports = {
   ensureStackUp,
   deployFlow,
   deleteFlow,
+  sweepHarnessFlows,
   triggerInject,
   connectComms,
   connectDirectNats,
   publishDirect,
   subscribeOnce,
+  subscribeOnceMsg,
+  serverNode,
 };
