@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          # no cache: npm — package-lock.json is gitignored, not committed
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Test
+        run: npm test
+
+      # Real pre-existing lint findings (from nodes/ files this step does not
+      # touch) are cleared across Steps 2-6 of the renovation plan. Flip to
+      # blocking once `npm run lint` is clean on main.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true

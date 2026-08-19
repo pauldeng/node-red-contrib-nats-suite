@@ -1,14 +1,15 @@
 services:
   nodered:
-    image: nodered/node-red:latest
+    image: nodered/node-red:5.0.0
     container_name: nodered-dev
     user: "1000:1000"  # Node-RED runs as UID 1000
     ports:
-      - '1885:1880'
-      - '4223:4223' # Expose embedded NATS server port
-      - '1884:1884' # Embedded NATS MQTT port
-      - '8223:8223' # Embedded NATS HTTP monitoring
-      - '8080:8080' # Embedded NATS WebSocket port
+      # Host side overridable via env (defaults unchanged) - see nats-server below.
+      - '${NODERED_PORT:-1885}:1880'
+      - '${NATS_EMBEDDED_PORT:-4223}:4223' # Expose embedded NATS server port
+      - '${NATS_EMBEDDED_MQTT_PORT:-1884}:1884' # Embedded NATS MQTT port
+      - '${NATS_EMBEDDED_HTTP_PORT:-8223}:8223' # Embedded NATS HTTP monitoring
+      - '${NATS_EMBEDDED_WS_PORT:-8080}:8080' # Embedded NATS WebSocket port
     volumes:
       - ./node-red:/data
       - ./:/data/node_modules/node-red-contrib-nats-suite
@@ -25,9 +26,11 @@ services:
     image: nats:latest
     container_name: nats-server-dev
     ports:
-      - '4222:4222'  # NATS Client connections
-      - '1883:1883'  # MQTT connections
-      - '8222:8222'  # HTTP monitoring
+      # Host side overridable via env (defaults unchanged) - some hosts already
+      # run something on 4222/1883/8222 (e.g. a system mosquitto service).
+      - '${NATS_CLIENT_PORT:-4222}:4222'  # NATS Client connections
+      - '${NATS_MQTT_PORT:-1883}:1883'  # MQTT connections
+      - '${NATS_HTTP_PORT:-8222}:8222'  # HTTP monitoring
       - '6222:6222'  # Cluster routing
     command:
       - "-c"
@@ -54,4 +57,3 @@ services:
 
 volumes:
   nats-data:
- 
