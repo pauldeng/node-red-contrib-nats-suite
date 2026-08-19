@@ -29,7 +29,9 @@ module.exports = function (RED) {
     }
 
     let jsClient = null;
+    let jsm = null;
     let streamInfo = null;
+    let statusRevertTimer = null;
     const sc = StringCodec();
 
     // Helper: Update node status based on connection state
@@ -42,6 +44,27 @@ module.exports = function (RED) {
       } else if (currentStatus === 'connecting') {
         node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
       }
+    };
+
+    // Helper: Revert a transient status message (e.g. "stream created") back
+    // to the connection status after 2 seconds. Tracked so close() can cancel
+    // a pending revert.
+    const scheduleStatusRevert = () => {
+      if (statusRevertTimer) clearTimeout(statusRevertTimer);
+      statusRevertTimer = setTimeout(() => {
+        statusRevertTimer = null;
+        updateConnectionStatus();
+      }, 2000);
+    };
+
+    // Helper: Acquire the JetStream client + manager once and cache them. The
+    // connection object is stable across native reconnects, so there is no
+    // need to re-derive these on every reconnect.
+    const ensureJetStream = async () => {
+      if (jsClient && jsm) return;
+      const nc = await node.serverConfig.getConnection();
+      jsClient = nc.jetstream();
+      jsm = await nc.jetstreamManager();
     };
 
     // Helper: Parse subject patterns (comma-separated or array)
@@ -84,9 +107,7 @@ module.exports = function (RED) {
     // Helper: Get or create stream
     const ensureStream = async () => {
       try {
-        const nc = await node.serverConfig.getConnection();
-        jsClient = nc.jetstream();
-        const jsm = await nc.jetstreamManager();
+        await ensureJetStream();
 
         // Try to get existing stream
         try {
@@ -124,9 +145,7 @@ module.exports = function (RED) {
             });
 
             // Revert to connection status after 2 seconds
-            setTimeout(() => {
-              updateConnectionStatus();
-            }, 2000);
+            scheduleStatusRevert();
 
             return true;
           }
@@ -139,9 +158,7 @@ module.exports = function (RED) {
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
 
         // Revert to connection status after 2 seconds
-        setTimeout(() => {
-          updateConnectionStatus();
-        }, 2000);
+        scheduleStatusRevert();
 
         return false;
       }
@@ -156,22 +173,19 @@ module.exports = function (RED) {
       ensureStream();
     }
 
-    // Status listener for connection changes
+    // Status listener for connection changes (status painting only; the
+    // JetStream client and stream handle are established once at node start
+    // and stay valid across native reconnects, so there is nothing to tear
+    // down or rebuild here).
     const statusListener = statusInfo => {
       const status = statusInfo.status || statusInfo;
 
       switch (status) {
         case 'connected':
           node.status({ fill: 'green', shape: 'dot', text: 'connected' });
-          // Re-ensure stream on reconnect only for publish operation when createOnInit is enabled
-          const operation = config.operation || 'publish';
-          if (operation === 'publish' && config.createOnInit !== false) {
-            ensureStream();
-          }
           break;
         case 'disconnected':
           node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          jsClient = null;
           break;
         case 'connecting':
           node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
@@ -184,9 +198,7 @@ module.exports = function (RED) {
     // Stream Management Operations
     const performStreamOperation = async msg => {
       try {
-        const nc = await node.serverConfig.getConnection();
-        const js = nc.jetstream();
-        const jsm = await nc.jetstreamManager();
+        await ensureJetStream();
 
         const operation = msg.operation || config.operation || 'publish';
         const streamName = msg.stream || config.streamName || '';
@@ -332,9 +344,7 @@ module.exports = function (RED) {
             });
 
             // Revert to connection status after 2 seconds
-            setTimeout(() => {
-              updateConnectionStatus();
-            }, 2000);
+            scheduleStatusRevert();
 
             break;
           }
@@ -498,9 +508,7 @@ module.exports = function (RED) {
             });
 
             // Revert to connection status after 2 seconds
-            setTimeout(() => {
-              updateConnectionStatus();
-            }, 2000);
+            scheduleStatusRevert();
 
             break;
           }
@@ -562,15 +570,13 @@ module.exports = function (RED) {
             });
 
             // Revert to connection status after 2 seconds
-            setTimeout(() => {
-              updateConnectionStatus();
-            }, 2000);
+            scheduleStatusRevert();
 
             break;
           }
 
           case 'purge': {
-            const stream = await js.streams.get(streamName);
+            const stream = await jsClient.streams.get(streamName);
             await stream.purge();
             msg.payload = {
               operation: 'purge',
@@ -610,9 +616,7 @@ module.exports = function (RED) {
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
 
         // Revert to connection status after 2 seconds
-        setTimeout(() => {
-          updateConnectionStatus();
-        }, 2000);
+        scheduleStatusRevert();
 
         node.send(msg);
       }
@@ -697,12 +701,18 @@ module.exports = function (RED) {
     });
 
     // Cleanup on close
-    node.on('close', function () {
+    node.on('close', function (done) {
+      if (statusRevertTimer) {
+        clearTimeout(statusRevertTimer);
+        statusRevertTimer = null;
+      }
       this.serverConfig.removeStatusListener(statusListener);
       this.serverConfig.unregisterConnectionUser(node.id);
       jsClient = null;
+      jsm = null;
       streamInfo = null;
       node.status({});
+      done();
     });
   }
 

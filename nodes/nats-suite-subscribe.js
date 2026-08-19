@@ -454,46 +454,44 @@ module.exports = function (RED) {
     const statusListener = status => {
       // Handle both old format (string) and new format (object)
       const statusValue = typeof status === 'object' ? status.status : status;
-      
+
       switch (statusValue) {
-        case 'connected':
+        case 'connected': {
           if (isDebug) {
             node.log(`[[NATS-SUITE SUBSCRIBE] Server connected`);
           }
-          
+
           // Clear connection timeout
           if (connectionTimeout) {
             clearTimeout(connectionTimeout);
             connectionTimeout = null;
           }
-          
+
           const connectionTime = connectionStartTime ? Math.floor((Date.now() - connectionStartTime) / 1000) : 0;
           if (connectionTime > 5) {
             node.warn(`NATS connection established after ${connectionTime}s`);
           }
-          
+
           setStatusGreen();
-          // Only setup subscription if we have a subject (from config or previous input)
-          if (currentSubject || baseSubject) {
-            setupSubscription();
-          }
+          // Subscription is established once at node start and survives native
+          // reconnect (the client transparently restores it), so it is not
+          // re-created here.
           break;
+        }
         case 'disconnected':
           if (isDebug) {
             node.log(`[[NATS-SUITE SUBSCRIBE] Server disconnected`);
           }
-          
+
           // Clear connection timeout
           if (connectionTimeout) {
             clearTimeout(connectionTimeout);
             connectionTimeout = null;
           }
-          
+
           setStatusRed();
-          if (subscription) {
-            subscription.unsubscribe();
-            subscription = null;
-          }
+          // Native reconnect restores the subscription itself; do not tear it
+          // down here.
           break;
         case 'connecting':
           if (isDebug) {
@@ -521,10 +519,17 @@ module.exports = function (RED) {
     };
 
     this.config.addStatusListener(statusListener);
-    
+
     // Connection Pool: Register this node as connection user
     this.config.registerConnectionUser(node.id);
 
+    // Establish the subscription once at node start. getConnection() resolves
+    // once connected, and the connection's identity is stable across native
+    // reconnects, so this never needs to run again. setupSubscription() is
+    // itself idempotent (it no-ops if the subject/queue hasn't changed).
+    if (currentSubject || baseSubject) {
+      setupSubscription();
+    }
 
     // Input handler for dynamic subscription changes
     node.on('input', async (msg) => {

@@ -35,6 +35,7 @@ module.exports = function (RED) {
     }
 
     let jsClient = null;
+    let jsm = null;
     let consumer = null;
     let isConsuming = false;
     let isPaused = false; // Pause state
@@ -76,12 +77,20 @@ module.exports = function (RED) {
       }
     };
 
+    // Helper: Acquire the JetStream client + manager once and cache them. The
+    // connection object is stable across native reconnects, so there is no
+    // need to re-derive these on every reconnect.
+    const ensureJetStream = async () => {
+      if (jsClient && jsm) return;
+      const nc = await node.serverConfig.getConnection();
+      jsClient = nc.jetstream();
+      jsm = await nc.jetstreamManager();
+    };
+
     // Helper: Get or create consumer
     const ensureConsumer = async () => {
       try {
-        const nc = await node.serverConfig.getConnection();
-        jsClient = nc.jetstream();
-        const jsm = await nc.jetstreamManager();
+        await ensureJetStream();
 
         // Check if stream exists
         try {
@@ -447,19 +456,23 @@ module.exports = function (RED) {
     // Initialize consumer
     ensureConsumer();
 
-    // Status listener for connection changes
+    // Status listener for connection changes (status painting only; the
+    // consumer is established once at node start and its handle stays valid
+    // across native reconnects, so there is nothing to tear down or rebuild
+    // here).
     const statusListener = statusInfo => {
       const status = statusInfo.status || statusInfo;
 
       switch (status) {
         case 'connected':
-          // Re-ensure consumer on reconnect
-          ensureConsumer();
+          node.status({
+            fill: 'green',
+            shape: 'dot',
+            text: `${config.consumerName} (ready)`,
+          });
           break;
         case 'disconnected':
           node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          consumer = null;
-          jsClient = null;
           break;
         case 'connecting':
           node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
@@ -472,9 +485,7 @@ module.exports = function (RED) {
     // Stream Management Operations
     const performStreamOperation = async msg => {
       try {
-        const nc = await node.serverConfig.getConnection();
-        const js = nc.jetstream();
-        const jsm = await nc.jetstreamManager();
+        await ensureJetStream();
 
         const operation = msg.operation || config.operation || 'consume';
         const streamName = msg.stream || config.streamName || '';
@@ -513,7 +524,7 @@ module.exports = function (RED) {
           }
 
           case 'purge': {
-            const stream = await js.streams.get(streamName);
+            const stream = await jsClient.streams.get(streamName);
             await stream.purge();
             msg.payload = {
               operation: 'purge',
@@ -545,8 +556,7 @@ module.exports = function (RED) {
     // Consumer Management Operations
     const performConsumerOperation = async msg => {
       try {
-        const nc = await node.serverConfig.getConnection();
-        const jsm = await nc.jetstreamManager();
+        await ensureJetStream();
 
         const operation = msg.operation || config.operation || 'consume';
         const streamName = msg.stream || config.streamName || '';
@@ -826,7 +836,7 @@ module.exports = function (RED) {
     });
 
     // Cleanup on close
-    node.on('close', async function () {
+    node.on('close', function (done) {
       this.serverConfig.removeStatusListener(statusListener);
       this.serverConfig.unregisterConnectionUser(node.id);
 
@@ -839,7 +849,9 @@ module.exports = function (RED) {
       // Don't delete the consumer - it's durable and should persist
       consumer = null;
       jsClient = null;
+      jsm = null;
       node.status({});
+      done();
     });
   }
 

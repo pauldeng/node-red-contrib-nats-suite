@@ -37,27 +37,37 @@ module.exports = function (RED) {
 
     // Health check state
     let healthCheckInterval = null;
+    let healthCheckStartTimer = null;
 
     // Register with connection pool
     this.serverConfig.registerConnectionUser(node.id);
 
-    // Status listener for connection changes
+    // Status listener for connection changes (status painting only; the
+    // service is started once at node start and its endpoint subscriptions
+    // survive native reconnect on their own - the client transparently
+    // restores them, and the underlying service object only self-closes when
+    // the connection is closed for good, not on a transient disconnect - so
+    // there is nothing to tear down or restart here).
     const statusListener = (statusInfo) => {
       const status = statusInfo.status || statusInfo;
-      
+
       switch (status) {
         case 'connected':
-          if (config.mode === 'service' && config.autoStart) {
-            startService();
+          if (config.mode === 'service') {
+            // Repaint only - reflects the service surviving the reconnect.
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: isServiceRunning
+                ? `${config.serviceName || 'default-service'} (running)`
+                : 'connected',
+            });
           } else if (config.mode === 'health') {
             node.status({ fill: 'green', shape: 'dot', text: 'connected' });
           }
           break;
         case 'disconnected':
           node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          if (service) {
-            stopService();
-          }
           break;
         case 'connecting':
           node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
@@ -675,17 +685,18 @@ module.exports = function (RED) {
 
     // ==================== INITIALIZATION ====================
 
-    // Auto-start service if configured
+    // Auto-start service if configured. startService() awaits
+    // getConnection() internally, so it naturally waits for the first
+    // connection rather than needing a delay-then-poll timer here.
     if (config.mode === 'service' && config.autoStart) {
-      setTimeout(() => {
-        if (this.serverConfig.connectionStatus === 'connected') {
-          startService();
-        }
-      }, 500);
+      startService();
     } else if (config.mode === 'health') {
       // Initial health check
       if (config.checkOnStart) {
-        setTimeout(performHealthCheck, 2000);
+        healthCheckStartTimer = setTimeout(() => {
+          healthCheckStartTimer = null;
+          performHealthCheck();
+        }, 2000);
       }
       // Periodic health check if enabled
       if (config.periodicCheck && config.checkInterval > 0) {
@@ -811,14 +822,20 @@ module.exports = function (RED) {
 
     // ==================== CLEANUP ====================
 
-    node.on('close', async function () {
+    node.on('close', async function (done) {
       if (healthCheckInterval) {
         clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+      }
+      if (healthCheckStartTimer) {
+        clearTimeout(healthCheckStartTimer);
+        healthCheckStartTimer = null;
       }
       await stopService();
       this.serverConfig.removeStatusListener(statusListener);
       this.serverConfig.unregisterConnectionUser(node.id);
       node.status({});
+      done();
     });
   }
 
