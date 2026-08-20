@@ -6,25 +6,18 @@ const {
   jetstream,
   jetstreamManager,
 } = require('@nats-io/jetstream');
+const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
+const { fromMsg } = require('../lib/payload');
+const { parseDuration } = require('../lib/duration');
 
 module.exports = function (RED) {
-  function UnsStreamConsumerNode(config) {
+  function NatsStreamConsumerNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
 
-    // Validate server configuration
-    if (!config.server) {
-      node.error('NATS server configuration not selected');
-      node.status({ fill: 'red', shape: 'ring', text: 'no server' });
-      return;
-    }
-
-    this.serverConfig = RED.nodes.getNode(config.server);
-    if (!this.serverConfig) {
-      node.error('NATS server configuration not found');
-      node.status({ fill: 'red', shape: 'ring', text: 'server not found' });
-      return;
-    }
+    this.serverConfig = resolveServer(RED, node, config);
+    if (!this.serverConfig) return;
 
     // Validate stream/consumer configuration
     if (!config.streamName) {
@@ -61,30 +54,6 @@ module.exports = function (RED) {
       if (value === undefined || value === null) return 0;
       if (typeof value === 'bigint') return Number(value);
       return value;
-    };
-
-    // Helper: Parse duration string to nanoseconds
-    const parseDuration = duration => {
-      if (!duration) return 0;
-
-      const match = duration.match(/^(\d+)([smhd])$/);
-      if (!match) return 0;
-
-      const [, num, unit] = match;
-      const value = parseInt(num, 10);
-
-      switch (unit) {
-        case 's':
-          return value * 1000000000;
-        case 'm':
-          return value * 60 * 1000000000;
-        case 'h':
-          return value * 3600 * 1000000000;
-        case 'd':
-          return value * 86400 * 1000000000;
-        default:
-          return 0;
-      }
     };
 
     // Helper: Acquire the JetStream client + manager once and cache them. The
@@ -221,86 +190,29 @@ module.exports = function (RED) {
           );
         }
 
-        // Parse based on mode (same logic as subscribe node)
+        // Parse based on mode (shared with the subscribe node's decoder)
         let payload;
-
-        switch (parseMode) {
-          case 'auto':
-            // Auto-detect: Try JSON, fallback to string
-            if (typeof data === 'string' && data.trim().length > 0) {
-              try {
-                payload = JSON.parse(data);
-                if (isDebug) {
-                  node.log(`[STREAM CONSUMER] Parsed message as JSON`);
-                }
-              } catch {
-                // Keep as string (expected for non-JSON messages)
-                payload = data;
-                if (isDebug) {
-                  node.log(
-                    `[STREAM CONSUMER] Message kept as string (JSON parse failed)`
-                  );
-                }
-              }
-            } else {
-              payload = data;
+        try {
+          payload = fromMsg(jetMsg, parseMode);
+        } catch (parseError) {
+          // Only forced 'json' mode can throw here (see lib/payload.js).
+          if (isDebug) {
+            node.log(
+              `[STREAM CONSUMER] JSON parsing failed: ${parseError.message}`
+            );
+          }
+          node.error(
+            {
+              message: 'JSON parsing failed',
+              code: 'JSON_PARSE_ERROR',
+              originalError: parseError.message,
+            },
+            {
+              topic: jetMsg.subject,
+              rawData: data,
             }
-            break;
-
-          case 'json':
-            // Force JSON parsing
-            try {
-              payload = JSON.parse(data);
-              if (isDebug) {
-                node.log(
-                  `[STREAM CONSUMER] Parsed message as JSON (forced mode)`
-                );
-              }
-            } catch (parseError) {
-              if (isDebug) {
-                node.log(
-                  `[STREAM CONSUMER] JSON parsing failed: ${parseError.message}`
-                );
-              }
-              node.error(
-                {
-                  message: 'JSON parsing failed',
-                  code: 'JSON_PARSE_ERROR',
-                  originalError: parseError.message,
-                },
-                {
-                  topic: jetMsg.subject,
-                  rawData: data,
-                }
-              );
-              return; // Stop processing on error
-            }
-            break;
-
-          case 'string':
-            // Keep as string
-            if (isDebug) {
-              node.log(`[STREAM CONSUMER] Message kept as string`);
-            }
-            payload = data;
-            break;
-
-          case 'buffer':
-            // Keep as buffer
-            if (isDebug) {
-              node.log(`[STREAM CONSUMER] Message kept as buffer`);
-            }
-            payload = jetMsg.data;
-            break;
-
-          default:
-            // Fallback to auto behavior
-            try {
-              payload = JSON.parse(data);
-            } catch {
-              payload = data;
-            }
-            break;
+          );
+          return; // Stop processing on error
         }
 
         // Build output message
@@ -474,24 +386,11 @@ module.exports = function (RED) {
     // Status listener for connection changes (status painting only; the
     // consumer is established once at node start and its handle stays valid
     // across native reconnects, so there is nothing to tear down or rebuild
-    // here).
-    const statusListener = statusInfo => {
-      const status = statusInfo.status || statusInfo;
-
-      switch (status) {
-        case 'connected':
-          setGreenStatus(`${config.consumerName} (ready)`);
-          break;
-        case 'disconnected':
-          node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          break;
-        case 'connecting':
-          node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
-          break;
-      }
-    };
-
-    this.serverConfig.addStatusListener(statusListener);
+    // here). disconnected/connecting use the default paint; 'connected'
+    // shows the consumer name instead of the generic text.
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => setGreenStatus(`${config.consumerName} (ready)`),
+    });
 
     // Stream Management Operations
     const performStreamOperation = async msg => {
@@ -819,7 +718,7 @@ module.exports = function (RED) {
 
     // Cleanup on close
     node.on('close', function (done) {
-      this.serverConfig.removeStatusListener(statusListener);
+      detachStatus();
       this.serverConfig.unregisterConnectionUser(node.id);
 
       // Clear idle timeout
@@ -837,5 +736,5 @@ module.exports = function (RED) {
     });
   }
 
-  RED.nodes.registerType('nats-suite-stream-consumer', UnsStreamConsumerNode);
+  RED.nodes.registerType('nats-suite-stream-consumer', NatsStreamConsumerNode);
 };

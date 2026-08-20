@@ -6,7 +6,6 @@
       name: { value: '' },
       server: { value: '', type: 'nats-suite-server', required: true },
       bucket: { value: '' },
-      bucketConfig: { value: '', type: 'nats-suite-kv-bucket', required: false },
       description: { value: '' },
       history: { value: 10 },
       maxAge: { value: 0 },
@@ -16,7 +15,6 @@
       replicas: { value: 1 },
       storage: { value: 'file' },
       operation: { value: 'put', required: true },
-      bucketOperation: { value: 'put' },
       key: { value: '' },
       keyFrom: { value: 'config' },
       value: { value: '' },
@@ -83,20 +81,10 @@
         }
       });
       
-      // Bucket config handler
-      $('#node-input-bucketConfig').on('change', function() {
-        if ($(this).val()) {
-          $('#bucket-direct-config').slideUp(200);
-        } else {
-          $('#bucket-direct-config').slideDown(200);
-        }
-      });
-      
       // Trigger initial state
       $('#node-input-operation').trigger('change');
       $('#node-input-keyFrom').trigger('change');
       $('#node-input-valueFrom').trigger('change');
-      $('#node-input-bucketConfig').trigger('change');
     }
   });
 </script>
@@ -243,10 +231,6 @@
           <input type="text" id="node-input-server">
         </div>
         <div class="nats-form-row">
-          <label><i class="fa fa-database"></i>Bucket Config (optional)</label>
-          <input type="text" id="node-input-bucketConfig">
-        </div>
-        <div class="nats-form-row" id="bucket-direct-config">
           <label><i class="fa fa-database"></i>Bucket Name</label>
           <input type="text" id="node-input-bucket" placeholder="my-bucket">
         </div>

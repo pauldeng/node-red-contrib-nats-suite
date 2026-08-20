@@ -1,46 +1,25 @@
 'use strict';
 
 const { Kvm } = require('@nats-io/kv');
+const { resolveServer } = require('../lib/connect');
 
 module.exports = function (RED) {
-  function UnsKvGetNode(config) {
+  function NatsKvGetNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
 
-    // Server configuration (required)
-    if (!config.server) {
-      node.error('NATS server configuration not selected');
-      node.status({ fill: 'red', shape: 'ring', text: 'no server' });
-      return;
-    }
+    this.serverConfig = resolveServer(RED, node, config);
+    if (!this.serverConfig) return;
 
-    this.serverConfig = RED.nodes.getNode(config.server);
-    if (!this.serverConfig) {
-      node.error('NATS server configuration not found');
-      node.status({ fill: 'red', shape: 'ring', text: 'server not found' });
-      return;
-    }
-
-    // Bucket configuration - can use bucketConfig node OR direct settings
     this.bucket = config.bucket || '';
-    this.bucketConfig = config.bucketConfig
-      ? RED.nodes.getNode(config.bucketConfig)
-      : null;
-
-    if (this.bucketConfig) {
-      this.bucket = this.bucketConfig.bucket;
-      this.serverConfig = this.bucketConfig.serverConfig;
-    } else {
-      // Direct bucket settings
-      this.description = config.description || '';
-      this.history = parseInt(config.history) || 10;
-      this.maxAge = parseInt(config.maxAge) || 0;
-      this.maxBytes = parseInt(config.maxBytes) || 0;
-      this.maxValueSize = parseInt(config.maxValueSize) || 0;
-      this.compression = !!config.compression;
-      this.replicas = parseInt(config.replicas) || 1;
-      this.storage = config.storage || 'file';
-    }
+    this.description = config.description || '';
+    this.history = parseInt(config.history) || 10;
+    this.maxAge = parseInt(config.maxAge) || 0;
+    this.maxBytes = parseInt(config.maxBytes) || 0;
+    this.maxValueSize = parseInt(config.maxValueSize) || 0;
+    this.compression = !!config.compression;
+    this.replicas = parseInt(config.replicas) || 1;
+    this.storage = config.storage || 'file';
 
     let kvStore = null;
     let watcher = null;
@@ -54,11 +33,6 @@ module.exports = function (RED) {
       if (kvStore) return kvStore;
 
       try {
-        if (node.bucketConfig) {
-          kvStore = await node.bucketConfig.getKVBucket();
-          return kvStore;
-        }
-
         const nc = await node.serverConfig.getConnection();
         const createOptions = {
           history: node.history,
@@ -389,5 +363,5 @@ module.exports = function (RED) {
     });
   }
 
-  RED.nodes.registerType('nats-suite-kv-get', UnsKvGetNode);
+  RED.nodes.registerType('nats-suite-kv-get', NatsKvGetNode);
 };

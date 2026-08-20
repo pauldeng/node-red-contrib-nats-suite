@@ -2,25 +2,16 @@
 
 const { Svcm } = require('@nats-io/services');
 const { jetstreamManager } = require('@nats-io/jetstream');
+const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsServiceNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
 
-    // Validate server configuration
-    if (!config.server) {
-      node.error('NATS server configuration not selected');
-      node.status({ fill: 'red', shape: 'ring', text: 'no server' });
-      return;
-    }
-
-    this.serverConfig = RED.nodes.getNode(config.server);
-    if (!this.serverConfig) {
-      node.error('NATS server configuration not found');
-      node.status({ fill: 'red', shape: 'ring', text: 'server not found' });
-      return;
-    }
+    this.serverConfig = resolveServer(RED, node, config);
+    if (!this.serverConfig) return;
 
     let nc = null;
     let service = null;
@@ -47,35 +38,28 @@ module.exports = function (RED) {
     // survive native reconnect on their own - the client transparently
     // restores them, and the underlying service object only self-closes when
     // the connection is closed for good, not on a transient disconnect - so
-    // there is nothing to tear down or restart here).
-    const statusListener = statusInfo => {
-      const status = statusInfo.status || statusInfo;
-
-      switch (status) {
-        case 'connected':
-          if (config.mode === 'service') {
-            // Repaint only - reflects the service surviving the reconnect.
-            node.status({
-              fill: 'green',
-              shape: 'dot',
-              text: isServiceRunning
-                ? `${config.serviceName || 'default-service'} (running)`
-                : 'connected',
-            });
-          } else if (config.mode === 'health') {
-            node.status({ fill: 'green', shape: 'dot', text: 'connected' });
-          }
-          break;
-        case 'disconnected':
-          node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          break;
-        case 'connecting':
-          node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
-          break;
-      }
-    };
-
-    this.serverConfig.addStatusListener(statusListener);
+    // there is nothing to tear down or restart here). disconnected/connecting
+    // use attachStatus's default paint (matches this node's prior behavior
+    // exactly); 'connected' needs a custom handler because discover/stats/
+    // ping/nats-stats modes must NOT repaint on every reconnect - they show
+    // per-operation result text instead, which a generic "connected" would
+    // clobber.
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => {
+        if (config.mode === 'service') {
+          // Repaint only - reflects the service surviving the reconnect.
+          node.status({
+            fill: 'green',
+            shape: 'dot',
+            text: isServiceRunning
+              ? `${config.serviceName || 'default-service'} (running)`
+              : 'connected',
+          });
+        } else if (config.mode === 'health') {
+          node.status({ fill: 'green', shape: 'dot', text: 'connected' });
+        }
+      },
+    });
 
     // ==================== SERVICE FUNCTIONS ====================
 
@@ -260,7 +244,7 @@ module.exports = function (RED) {
       try {
         nc = await node.serverConfig.getConnection();
 
-        const serviceName = config.serviceName || '*';
+        const serviceName = config.discoveryFilter || '*';
         const services = [];
 
         // Get service client
@@ -294,7 +278,7 @@ module.exports = function (RED) {
       try {
         nc = await node.serverConfig.getConnection();
 
-        const serviceName = config.serviceName || '*';
+        const serviceName = config.discoveryFilter || '*';
         const stats = [];
 
         // Get service client
@@ -844,7 +828,7 @@ module.exports = function (RED) {
           }
 
           case 'ping': {
-            const pingServiceName = msg.serviceName || config.serviceName;
+            const pingServiceName = msg.serviceName || config.discoveryFilter;
             nc = await node.serverConfig.getConnection();
             const client = new Svcm(nc).client();
             const pingResults = [];
@@ -917,7 +901,7 @@ module.exports = function (RED) {
         healthCheckStartTimer = null;
       }
       await stopService();
-      this.serverConfig.removeStatusListener(statusListener);
+      detachStatus();
       this.serverConfig.unregisterConnectionUser(node.id);
       node.status({});
       done();

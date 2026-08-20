@@ -1,6 +1,8 @@
 'use strict';
 
 const { TimeoutError, headers: natsHeaders } = require('@nats-io/nats-core');
+const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsPublishNode(config) {
@@ -25,66 +27,45 @@ module.exports = function (RED) {
 
     setStatusRed();
 
-    if (!config.server) {
-      node.error(
-        'NATS server configuration not selected. Please select a NATS server node.'
-      );
-      return;
-    }
+    this.config = resolveServer(RED, node, config);
+    if (!this.config) return;
 
-    this.config = RED.nodes.getNode(config.server);
+    const detachStatus = attachStatus(node, this.config, {
+      connected: () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        setStatusGreen();
+      },
+      disconnected: statusInfo => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        node.status({
+          fill: 'red',
+          shape: 'ring',
+          text: `disconnected (${statusInfo.reconnectAttempts || 0})`,
+        });
+      },
+      connecting: statusInfo => {
+        node.status({
+          fill: 'yellow',
+          shape: 'ring',
+          text: `connecting (${statusInfo.reconnectAttempts || 0})`,
+        });
+        connectionStartTime = Date.now();
+        if (connectionTimeout) clearTimeout(connectionTimeout);
+        connectionTimeout = setTimeout(() => {
+          const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
+          node.warn(
+            `NATS connection taking longer than expected (${elapsed}s). Check server availability.`
+          );
+        }, 10000);
+      },
+    });
 
-    if (!this.config) {
-      node.error(
-        'NATS server configuration not found. Please configure a NATS server node.'
-      );
-      return;
-    }
-
-    const statusListener = statusInfo => {
-      const status = statusInfo.status || statusInfo; // Backward compatibility
-      switch (status) {
-        case 'connected':
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
-          }
-          setStatusGreen();
-          break;
-        case 'disconnected':
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
-          }
-          node.status({
-            fill: 'red',
-            shape: 'ring',
-            text: `disconnected (${statusInfo.reconnectAttempts || 0})`,
-          });
-          break;
-        case 'connecting':
-          node.status({
-            fill: 'yellow',
-            shape: 'ring',
-            text: `connecting (${statusInfo.reconnectAttempts || 0})`,
-          });
-          connectionStartTime = Date.now();
-          if (connectionTimeout) clearTimeout(connectionTimeout);
-          connectionTimeout = setTimeout(() => {
-            const elapsed = Math.floor(
-              (Date.now() - connectionStartTime) / 1000
-            );
-            node.warn(
-              `NATS connection taking longer than expected (${elapsed}s). Check server availability.`
-            );
-          }, 10000);
-          break;
-        default:
-        // Unknown status - ignore
-      }
-    };
-
-    this.config.addStatusListener(statusListener);
     this.config.registerConnectionUser(node.id);
 
     // Resolve the subject to publish/reply on for the current mode
@@ -330,7 +311,7 @@ module.exports = function (RED) {
       if (connectionTimeout) clearTimeout(connectionTimeout);
       if (statusRestoreTimer) clearTimeout(statusRestoreTimer);
       connectionTimeout = statusRestoreTimer = null;
-      node.config.removeStatusListener(statusListener);
+      detachStatus();
       node.config.unregisterConnectionUser(node.id);
       done();
     });

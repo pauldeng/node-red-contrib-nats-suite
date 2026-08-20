@@ -7,25 +7,18 @@ const {
   jetstream,
   jetstreamManager,
 } = require('@nats-io/jetstream');
+const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
+const { toPayload } = require('../lib/payload');
+const { parseDuration } = require('../lib/duration');
 
 module.exports = function (RED) {
-  function UnsStreamPublisherNode(config) {
+  function NatsStreamPublisherNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
 
-    // Validate server configuration
-    if (!config.server) {
-      node.error('NATS server configuration not selected');
-      node.status({ fill: 'red', shape: 'ring', text: 'no server' });
-      return;
-    }
-
-    this.serverConfig = RED.nodes.getNode(config.server);
-    if (!this.serverConfig) {
-      node.error('NATS server configuration not found');
-      node.status({ fill: 'red', shape: 'ring', text: 'server not found' });
-      return;
-    }
+    this.serverConfig = resolveServer(RED, node, config);
+    if (!this.serverConfig) return;
 
     // Validate stream configuration
     if (!config.streamName) {
@@ -83,30 +76,6 @@ module.exports = function (RED) {
           .filter(s => s.length > 0);
       }
       return ['*'];
-    };
-
-    // Helper: Parse duration string to nanoseconds (e.g., "24h" -> nanoseconds)
-    const parseDuration = duration => {
-      if (!duration) return 0;
-
-      const match = duration.match(/^(\d+)([smhd])$/);
-      if (!match) return 0;
-
-      const [, num, unit] = match;
-      const value = parseInt(num, 10);
-
-      switch (unit) {
-        case 's':
-          return value * 1000000000; // seconds to nanoseconds
-        case 'm':
-          return value * 60 * 1000000000; // minutes
-        case 'h':
-          return value * 3600 * 1000000000; // hours
-        case 'd':
-          return value * 86400 * 1000000000; // days
-        default:
-          return 0;
-      }
     };
 
     // Helper: Get or create stream
@@ -209,24 +178,9 @@ module.exports = function (RED) {
     // Status listener for connection changes (status painting only; the
     // JetStream client and stream handle are established once at node start
     // and stay valid across native reconnects, so there is nothing to tear
-    // down or rebuild here).
-    const statusListener = statusInfo => {
-      const status = statusInfo.status || statusInfo;
-
-      switch (status) {
-        case 'connected':
-          node.status({ fill: 'green', shape: 'dot', text: 'connected' });
-          break;
-        case 'disconnected':
-          node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-          break;
-        case 'connecting':
-          node.status({ fill: 'yellow', shape: 'ring', text: 'connecting' });
-          break;
-      }
-    };
-
-    this.serverConfig.addStatusListener(statusListener);
+    // down or rebuild here). Default connected/disconnected/connecting paint
+    // is exactly what this node needs - no custom handlers.
+    const detachStatus = attachStatus(node, this.serverConfig);
 
     // Stream Management Operations
     const performStreamOperation = async msg => {
@@ -698,12 +652,7 @@ module.exports = function (RED) {
         }
 
         // Prepare payload
-        const payload =
-          msg.payload instanceof Uint8Array
-            ? msg.payload
-            : typeof msg.payload === 'object'
-              ? JSON.stringify(msg.payload)
-              : String(msg.payload);
+        const payload = toPayload(msg.payload);
 
         // Prepare headers if provided
         let msgHeaders;
@@ -752,7 +701,7 @@ module.exports = function (RED) {
         clearTimeout(statusRevertTimer);
         statusRevertTimer = null;
       }
-      this.serverConfig.removeStatusListener(statusListener);
+      detachStatus();
       this.serverConfig.unregisterConnectionUser(node.id);
       jsClient = null;
       jsm = null;
@@ -762,5 +711,8 @@ module.exports = function (RED) {
     });
   }
 
-  RED.nodes.registerType('nats-suite-stream-publisher', UnsStreamPublisherNode);
+  RED.nodes.registerType(
+    'nats-suite-stream-publisher',
+    NatsStreamPublisherNode
+  );
 };

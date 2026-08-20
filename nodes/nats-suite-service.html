@@ -6,6 +6,9 @@
       name: { value: '' },
       server: { value: '', type: 'nats-suite-server', required: true },
       mode: { value: 'discover', required: true },
+      // Discovery filter (discover/stats/ping modes) - independent of serviceName below,
+      // which is this node's own service name in 'service' mode.
+      discoveryFilter: { value: '' },
       // Service config
       serviceName: { value: 'my-service' },
       serviceVersion: { value: '1.0.0' },
@@ -118,24 +121,6 @@
       // Initialize mode-based visibility
       $('#node-input-mode').trigger('change');
       
-      // Ensure service name is preserved when switching modes
-      // Store the value before mode change
-      let savedServiceName = $('#node-input-serviceName').val() || '';
-      
-      // Update saved value when service name changes
-      $('#node-input-serviceName').on('input change', function() {
-        savedServiceName = $(this).val() || '';
-      });
-      
-      // Restore service name when mode changes back to service
-      $('#node-input-mode').on('change', function() {
-        const mode = $(this).val();
-        if (mode === 'service' && savedServiceName) {
-          // Restore the saved service name
-          $('#node-input-serviceName').val(savedServiceName);
-        }
-      });
-      
       // Periodic check handler
       $('#node-input-periodicCheck').on('change', function() {
         if ($(this).is(':checked')) {
@@ -148,36 +133,6 @@
       
       // Note: Node-RED will automatically update the label when the node is saved
       // The label() function will be called with the updated config values
-    },
-    oneditsave: function() {
-      // Ensure serviceName is saved correctly
-      // Get the value from the visible field (both fields share the same ID)
-      const mode = $('#node-input-mode').val();
-      
-      // Find the visible serviceName input field
-      let serviceNameValue = '';
-      if (mode === 'service') {
-        // In service mode, get value from service-config section
-        serviceNameValue = $('#service-config #node-input-serviceName').val() || '';
-      } else {
-        // In other modes, get value from discovery-config section
-        serviceNameValue = $('#discovery-config #node-input-serviceName').val() || '';
-      }
-      
-      // If no value found, try the general field
-      if (!serviceNameValue) {
-        serviceNameValue = $('#node-input-serviceName').val() || '';
-      }
-      
-      // Ensure the value is set (don't allow empty for service mode)
-      if (mode === 'service' && (!serviceNameValue || serviceNameValue.trim() === '')) {
-        serviceNameValue = 'my-service';
-      }
-      
-      // Set the value in all fields to ensure consistency
-      $('#node-input-serviceName').val(serviceNameValue);
-      
-      return true;
     },
     oneditresize: function(size) {
       // This is called when the edit dialog is resized
@@ -363,7 +318,7 @@
         <div class="nats-section-content">
           <div class="nats-form-row">
             <label><i class="fa fa-filter"></i>Service Name Filter</label>
-            <input type="text" id="node-input-serviceName" placeholder="my-service (or * for all)">
+            <input type="text" id="node-input-discoveryFilter" placeholder="my-service (or * for all)">
             <div class="nats-hint">Use * to discover all services</div>
           </div>
         </div>

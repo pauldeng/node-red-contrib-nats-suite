@@ -2,25 +2,15 @@
 
 const { Objm } = require('@nats-io/obj');
 const { nanos } = require('@nats-io/nats-core');
+const { resolveServer } = require('../lib/connect');
 
 module.exports = function (RED) {
   function NatsObjectGetNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
 
-    // Server configuration (required)
-    if (!config.server) {
-      node.error('NATS server configuration not selected');
-      node.status({ fill: 'red', shape: 'ring', text: 'no server' });
-      return;
-    }
-
-    this.serverConfig = RED.nodes.getNode(config.server);
-    if (!this.serverConfig) {
-      node.error('NATS server configuration not found');
-      node.status({ fill: 'red', shape: 'ring', text: 'server not found' });
-      return;
-    }
+    this.serverConfig = resolveServer(RED, node, config);
+    if (!this.serverConfig) return;
 
     // Bucket configuration - can use bucketConfig node OR direct settings
     this.bucket = config.bucket || '';
@@ -207,7 +197,7 @@ module.exports = function (RED) {
     });
 
     node.on('close', function () {
-      this.serverConfig.removeConnectionUser(node.id);
+      this.serverConfig.unregisterConnectionUser(node.id);
     });
   }
 
