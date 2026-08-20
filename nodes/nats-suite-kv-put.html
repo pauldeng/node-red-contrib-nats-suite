@@ -46,15 +46,8 @@
         const op = $(this).val();
         if (['bucket-create', 'bucket-info', 'bucket-delete', 'bucket-list'].includes(op)) {
           $('#key-value-config').slideUp(200);
-          $('#bucket-mgmt-config').slideDown(200);
-          if (op === 'bucket-create') {
-            $('#bucket-create-settings').slideDown(200);
-          } else {
-            $('#bucket-create-settings').slideUp(200);
-          }
         } else {
           $('#key-value-config').slideDown(200);
-          $('#bucket-mgmt-config').slideUp(200);
           if (op === 'put' || op === 'create') {
             $('#value-config').slideDown(200);
           } else {
@@ -240,7 +233,55 @@
         </div>
       </div>
     </div>
-    
+
+    <!-- Bucket Settings -->
+    <div class="nats-section">
+      <div class="nats-section-header">
+        <div class="nats-section-title">
+          <i class="fa fa-database"></i>
+          <span>Bucket Settings</span>
+        </div>
+        <i class="fa fa-chevron-down nats-section-toggle"></i>
+      </div>
+      <div class="nats-section-content">
+        <div class="nats-form-row">
+          <label for="node-input-description">Description</label>
+          <input type="text" id="node-input-description">
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-history">History</label>
+          <input type="number" id="node-input-history" min="1" max="64">
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-maxAge">Maximum Age (seconds)</label>
+          <input type="number" id="node-input-maxAge" min="0">
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-maxBytes">Maximum Bytes</label>
+          <input type="number" id="node-input-maxBytes" min="0">
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-maxValueSize">Maximum Value Size</label>
+          <input type="number" id="node-input-maxValueSize" min="0">
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-storage">Storage</label>
+          <select id="node-input-storage">
+            <option value="file">File</option>
+            <option value="memory">Memory</option>
+          </select>
+        </div>
+        <div class="nats-form-row">
+          <label for="node-input-replicas">Replicas</label>
+          <input type="number" id="node-input-replicas" min="1">
+        </div>
+        <div class="nats-checkbox-row">
+          <input type="checkbox" id="node-input-compression">
+          <label for="node-input-compression">Enable Compression</label>
+        </div>
+      </div>
+    </div>
+
     <!-- Operation -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -301,22 +342,6 @@
           </div>
         </div>
         
-        <!-- Bucket Management Config -->
-        <div id="bucket-mgmt-config" style="display: none;">
-          <div id="bucket-create-settings" style="display: none;">
-            <div class="nats-hint" style="margin-bottom: 12px;">
-              Configure bucket settings for creation
-            </div>
-            <div class="nats-form-row">
-              <label><i class="fa fa-history"></i>History</label>
-              <input type="number" id="node-input-history" placeholder="10" min="1" max="100" style="width: 100px;">
-            </div>
-            <div class="nats-form-row">
-              <label><i class="fa fa-clock-o"></i>TTL (seconds)</label>
-              <input type="number" id="node-input-maxAge" placeholder="0" min="0" style="width: 120px;">
-            </div>
-          </div>
-        </div>
       </div>
     </div>
     

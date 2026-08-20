@@ -1,13 +1,8 @@
 'use strict';
 
-// Direct integration tests against real NATS/JetStream for the Object Store
-// surface used by nodes-dev/nats-suite-object-get.js and
-// nodes-dev/nats-suite-object-put.js. Those two node files aren't registered
-// in package.json yet (Step 5), so they can't be flow-deployed through the
-// real Node-RED container - this exercises the exact @nats-io/obj (Objm)
-// call sequence the migrated node code now uses, directly against a real
-// broker, proving bugs 3/5 and the create()/putBlob()/headers() migration
-// are actually fixed.
+// Direct integration tests for the @nats-io/obj calls used by the registered
+// Object Store nodes. Real Node-RED wrapper behavior is covered separately in
+// promotion.test.js.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

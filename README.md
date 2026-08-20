@@ -14,8 +14,8 @@ A comprehensive Node-RED module for NATS (NATS Messaging System) with support fo
 
 - **Current version**: `0.2.2`
 - **Stability**: APIs and node options may still change between minor versions.
-- **Tested with**: Node-RED `>= 3.0.0`, Node.js `>= 14.0.0`, NATS Server `>= 2.9` (with JetStream enabled for JetStream/KV/Object Store features).
-- For detailed manual test flows, see `TEST-CASES.md`. Automated tests are located in the `__tests__` directory and can be executed via `npm test`.
+- **Requires**: Node-RED `>= 5.0.0`, Node.js `>= 22.9.0`, NATS Server `>= 2.9` (with JetStream enabled for JetStream/KV/Object Store features).
+- For detailed manual test flows, see `TEST-CASES.md`. Automated tests are located in `test/` and can be executed via `npm test`.
 
 ## Features
 
@@ -403,15 +403,15 @@ This section provides a comprehensive overview of NATS features and their implem
 
 | Feature | Status | Node | Notes |
 |---------|--------|------|-------|
-| Bucket Create | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| Bucket Delete | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| Bucket Info | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| Bucket List | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| Put Object | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| Get Object | 🔧 In Development | `nats-suite-object-get` | In `nodes-dev/` folder |
-| Delete Object | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
-| List Objects | 🔧 In Development | `nats-suite-object-get` | In `nodes-dev/` folder |
-| Object Metadata | 🔧 In Development | `nats-suite-object-put` | In `nodes-dev/` folder |
+| Bucket Create | ✅ Complete | `nats-suite-object-put` | Configurable storage, limits, replicas, and compression |
+| Bucket Delete | ✅ Complete | `nats-suite-object-put` | Delete buckets |
+| Bucket Info | ✅ Complete | `nats-suite-object-put` | Get bucket details |
+| Bucket List | ✅ Complete | `nats-suite-object-put` | List all buckets |
+| Put Object | ✅ Complete | `nats-suite-object-put` | Upload messages, buffers, or files |
+| Get Object | ✅ Complete | `nats-suite-object-get` | Download object data |
+| Delete Object | ✅ Complete | `nats-suite-object-put` | Delete objects |
+| List Objects | ✅ Complete | `nats-suite-object-get` | List bucket contents |
+| Object Metadata | ✅ Complete | `nats-suite-object-put` | Content type and NATS headers |
 | Watch | ❌ Not Implemented | - | Monitor object changes |
 | Object Links | ❌ Not Implemented | - | Create object references |
 | Bucket Links | ❌ Not Implemented | - | Cross-bucket linking |
@@ -421,13 +421,13 @@ This section provides a comprehensive overview of NATS features and their implem
 
 | Feature | Status | Node | Notes |
 |---------|--------|------|-------|
-| Create Service | 🔧 In Development | `nats-suite-service` | In `nodes-dev/` folder |
-| Add Endpoint | 🔧 In Development | `nats-suite-service` | In `nodes-dev/` folder |
-| Start/Stop Service | 🔧 In Development | `nats-suite-service` | In `nodes-dev/` folder |
-| Service Discovery | 🔧 In Development | `nats-suite-service` | Ping/Info operations |
-| Service Stats | 🔧 In Development | `nats-suite-service` | Metrics collection |
-| Health Monitoring | 🔧 In Development | `nats-suite-service` | Connection health checks |
-| NATS Stats | 🔧 In Development | `nats-suite-service` | Server/JetStream stats |
+| Create Service | ✅ Complete | `nats-suite-service` | Register a named service |
+| Add Endpoint | ✅ Complete | `nats-suite-service` | Configurable endpoint subject |
+| Start/Stop Service | ✅ Complete | `nats-suite-service` | Runtime lifecycle operations |
+| Service Discovery | ✅ Complete | `nats-suite-service` | Ping/Info operations |
+| Service Stats | ✅ Complete | `nats-suite-service` | Metrics collection |
+| Health Monitoring | ✅ Complete | `nats-suite-service` | Connection health checks |
+| NATS Stats | ✅ Complete | `nats-suite-service` | Server/JetStream stats |
 | Service Groups | ❌ Not Implemented | - | Endpoint grouping |
 
 #### Server Management Features
@@ -450,8 +450,8 @@ This section provides a comprehensive overview of NATS features and their implem
 | **Core NATS** | 15 | 0 | 2 | 88% |
 | **JetStream** | 20 | 0 | 5 | 80% |
 | **KV Store** | 15 | 0 | 1 | 94% |
-| **Object Store** | 0 | 9 | 4 | 0% (prod) / 69% (dev) |
-| **Services API** | 0 | 7 | 1 | 0% (prod) / 87% (dev) |
+| **Object Store** | 9 | 0 | 4 | 69% |
+| **Services API** | 7 | 0 | 1 | 87% |
 | **Server Management** | 8 | 0 | 0 | 100% |
 
 ### Legend
@@ -459,7 +459,6 @@ This section provides a comprehensive overview of NATS features and their implem
 | Symbol | Meaning |
 |--------|---------|
 | ✅ | Complete - Available in production nodes |
-| 🔧 | In Development - Available in `nodes-dev/` folder |
 | 🔄 | Partial - Basic functionality available |
 | ❌ | Not Implemented - Not yet available |
 
@@ -467,11 +466,10 @@ This section provides a comprehensive overview of NATS features and their implem
 
 Features planned for future releases:
 
-1. **Object Store & Services API** - Move from `nodes-dev/` to production
-2. **KV Compare-And-Swap** - Atomic conditional updates
-3. **Stream Mirrors** - Read-only stream replication
-4. **Stream Sources** - Aggregate from multiple streams
-5. **Object Store Watch** - Monitor object changes
+1. **KV Compare-And-Swap** - Atomic conditional updates
+2. **Stream Mirrors** - Read-only stream replication
+3. **Stream Sources** - Aggregate from multiple streams
+4. **Object Store Watch** - Monitor object changes
 
 ---
 

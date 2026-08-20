@@ -13,6 +13,11 @@ module.exports = function (RED) {
     this.serverConfig = resolveServer(RED, node, config);
     if (!this.serverConfig) return;
 
+    // Step 5 split the old serviceName field into an independent discovery
+    // filter. Flows saved before that split have no discoveryFilter property.
+    const discoveryFilter =
+      (config.discoveryFilter ?? config.serviceName) || '*';
+
     let nc = null;
     let service = null;
     const isDebug = !!config.debug;
@@ -206,7 +211,10 @@ module.exports = function (RED) {
 
         // Add endpoint to service. addEndpoint() is synchronous - it returns
         // a QueuedIterator<ServiceMsg>, not a Promise.
-        service.addEndpoint(endpoint, endpointHandler);
+        service.addEndpoint(endpoint, {
+          subject,
+          handler: endpointHandler,
+        });
 
         node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
         node.log(`[SERVICE] Endpoint: ${subject}`);
@@ -244,7 +252,7 @@ module.exports = function (RED) {
       try {
         nc = await node.serverConfig.getConnection();
 
-        const serviceName = config.discoveryFilter || '*';
+        const serviceName = discoveryFilter;
         const services = [];
 
         // Get service client
@@ -278,7 +286,7 @@ module.exports = function (RED) {
       try {
         nc = await node.serverConfig.getConnection();
 
-        const serviceName = config.discoveryFilter || '*';
+        const serviceName = discoveryFilter;
         const stats = [];
 
         // Get service client
@@ -828,7 +836,7 @@ module.exports = function (RED) {
           }
 
           case 'ping': {
-            const pingServiceName = msg.serviceName || config.discoveryFilter;
+            const pingServiceName = msg.serviceName || discoveryFilter;
             nc = await node.serverConfig.getConnection();
             const client = new Svcm(nc).client();
             const pingResults = [];

@@ -82,6 +82,11 @@
     },
     paletteLabel: 'nats service',
     oneditprepare: function() {
+      // Preserve the discovery filter stored in serviceName by pre-Step-5 flows.
+      if (this.discoveryFilter === undefined && this.mode !== 'service') {
+        $('#node-input-discoveryFilter').val(this.serviceName || '*');
+      }
+
       // Collapsible sections
       $('.nats-section-header').on('click', function() {
         const $header = $(this);

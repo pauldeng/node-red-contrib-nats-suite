@@ -109,7 +109,7 @@ module.exports = function (RED) {
                   ? nanos(node.maxAge * 1000)
                   : undefined,
               storage:
-                msg.storage || node.storage === 'memory' ? 'memory' : 'file',
+                (msg.storage || node.storage) === 'memory' ? 'memory' : 'file',
               replicas: msg.replicas
                 ? parseInt(msg.replicas, 10)
                 : node.replicas || 1,

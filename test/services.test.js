@@ -1,13 +1,8 @@
 'use strict';
 
-// Direct integration tests against real NATS for the Services surface used
-// by nodes-dev/nats-suite-service.js. That node isn't registered in
-// package.json yet (Step 5), so it can't be flow-deployed through the real
-// Node-RED container - this exercises the exact @nats-io/services (Svcm)
-// call sequence the migrated node code now uses, directly against a real
-// broker: add a service with a plain-string endpoint handler (matching how
-// the node decodes/responds without codecs), then discover/stats/ping it
-// via a ServiceClient, and request it directly.
+// Direct integration tests for the @nats-io/services calls used by the
+// registered service node. Real Node-RED wrapper behavior is covered
+// separately in promotion.test.js.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

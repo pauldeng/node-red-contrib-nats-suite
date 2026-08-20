@@ -153,7 +153,6 @@
         "server": "example-nats-server",
         "dataformat": "auto",
         "datapointid": "test.>",
-        "topicfield": "subject",
         "subscriptionMode": "static",
         "debug": true,
         "x": 200,
@@ -185,7 +184,6 @@
         "server": "example-nats-server",
         "dataformat": "json",
         "datapointid": "test.json",
-        "topicfield": "subject",
         "subscriptionMode": "static",
         "debug": false,
         "x": 210,
@@ -210,4 +208,3 @@
         "wires": []
     }
 ]
-

@@ -148,6 +148,7 @@
       text-align: center;
     }
     .nats-form-row input[type="text"],
+    .nats-form-row input[type="number"],
     .nats-form-row select {
       width: 100%;
       padding: 8px 10px;
@@ -217,9 +218,38 @@
           <label><i class="fa fa-database"></i>Bucket Config (optional)</label>
           <input type="text" id="node-input-bucketConfig">
         </div>
-        <div class="nats-form-row" id="bucket-direct-config">
-          <label><i class="fa fa-database"></i>Bucket Name</label>
-          <input type="text" id="node-input-bucket" placeholder="my-bucket">
+        <div id="bucket-direct-config">
+          <div class="nats-form-row">
+            <label for="node-input-bucket"><i class="fa fa-database"></i>Bucket Name</label>
+            <input type="text" id="node-input-bucket" placeholder="my-bucket">
+          </div>
+          <div class="nats-form-row">
+            <label for="node-input-description"><i class="fa fa-info-circle"></i>Description</label>
+            <input type="text" id="node-input-description">
+          </div>
+          <div class="nats-form-row">
+            <label for="node-input-maxAge"><i class="fa fa-clock-o"></i>Maximum Age (seconds)</label>
+            <input type="number" id="node-input-maxAge" min="0">
+          </div>
+          <div class="nats-form-row">
+            <label for="node-input-maxBytes"><i class="fa fa-hdd-o"></i>Maximum Bytes</label>
+            <input type="number" id="node-input-maxBytes" min="0">
+          </div>
+          <div class="nats-form-row">
+            <label for="node-input-storage"><i class="fa fa-database"></i>Storage</label>
+            <select id="node-input-storage">
+              <option value="file">File</option>
+              <option value="memory">Memory</option>
+            </select>
+          </div>
+          <div class="nats-form-row">
+            <label for="node-input-replicas"><i class="fa fa-copy"></i>Replicas</label>
+            <input type="number" id="node-input-replicas" min="1">
+          </div>
+          <div class="nats-checkbox-row">
+            <input type="checkbox" id="node-input-compression">
+            <label for="node-input-compression"><i class="fa fa-compress"></i>Enable Compression</label>
+          </div>
         </div>
         <div class="nats-checkbox-row">
           <input type="checkbox" id="node-input-debug">

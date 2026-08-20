@@ -102,7 +102,7 @@ module.exports = function (RED) {
                 ? parseInt(msg.replicas, 10)
                 : node.replicas || 1,
               storage:
-                msg.storage || node.storage === 'memory' ? 'memory' : 'file',
+                (msg.storage || node.storage) === 'memory' ? 'memory' : 'file',
             };
 
             Object.keys(createOptions).forEach(key => {
