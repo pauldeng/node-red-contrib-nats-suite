@@ -22,12 +22,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
-// ponytail: JetStream stream/consumer admin needs a client with
-// jetstreamManager(). @nats-io/jetstream (the 3.x replacement) isn't
-// installed yet (Step 4 migration hasn't landed) - `nats` v2.29.3 is already
-// an installed dependency and is the exact client nodes/*.js itself still
-// uses for JetStream, so reusing it here matches production, not a new dep.
-const nats2 = require('nats');
+const { connect } = require('@nats-io/transport-node');
+const { jetstreamManager } = require('@nats-io/jetstream');
 const {
   ensureStackUp,
   deployFlow,
@@ -115,14 +111,14 @@ async function deleteStream(name) {
   // default): this is called right after startNats(), before anything has
   // confirmed the container is actually accepting connections yet, and a
   // freshly (re)started container needs a couple of seconds.
-  const nc = await nats2.connect({
+  const nc = await connect({
     servers: NATS_URL,
     tls: null,
     waitOnFirstConnect: false,
     reconnectTimeWait: 500,
   });
   try {
-    const jsm = await nc.jetstreamManager();
+    const jsm = await jetstreamManager(nc);
     await jsm.streams.delete(name).catch(() => {});
   } finally {
     await nc.close();
@@ -388,7 +384,10 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
           'pending-dial close did not resolve'
         );
         pendingFlowId = null;
-        assert.ok(Date.now() - started < 10000, 'pending-dial close must be bounded');
+        assert.ok(
+          Date.now() - started < 10000,
+          'pending-dial close must be bounded'
+        );
       }
     );
 
@@ -569,7 +568,10 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
           'established close did not resolve'
         );
         flowAId = null;
-        assert.ok(Date.now() - started < 10000, 'established close must be bounded');
+        assert.ok(
+          Date.now() - started < 10000,
+          'established close must be bounded'
+        );
       }
     );
 

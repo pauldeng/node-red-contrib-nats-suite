@@ -1,0 +1,142 @@
+'use strict';
+
+// Direct integration tests against real NATS/JetStream for the Object Store
+// surface used by nodes-dev/nats-suite-object-get.js and
+// nodes-dev/nats-suite-object-put.js. Those two node files aren't registered
+// in package.json yet (Step 5), so they can't be flow-deployed through the
+// real Node-RED container - this exercises the exact @nats-io/obj (Objm)
+// call sequence the migrated node code now uses, directly against a real
+// broker, proving bugs 3/5 and the create()/putBlob()/headers() migration
+// are actually fixed.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { Objm } = require('@nats-io/obj');
+const { headers: natsHeaders } = require('@nats-io/nats-core');
+const { ensureStackUp, connectDirectNats } = require('./lib/harness');
+
+async function cleanup(nc, bucket) {
+  try {
+    const os = await new Objm(nc).open(bucket);
+    await os.destroy();
+  } catch {
+    // The bucket may not have been created if setup failed.
+  }
+  try {
+    await nc.close();
+  } catch {
+    // Cleanup is best-effort after the assertion result is known.
+  }
+}
+
+test('object store: create-or-open, putBlob with headers, get, list', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const bucket = `test_obj_${Date.now().toString(36)}`;
+  const nc = await connectDirectNats();
+
+  try {
+    const objm = new Objm(nc);
+
+    // create() is create-or-open - calling it twice for the same bucket
+    // must not throw (this is what replaces the old try-open-then-create
+    // fallback in the node code).
+    const os1 = await objm.create(bucket, { storage: 'file', replicas: 1 });
+    const os2 = await objm.create(bucket);
+    assert.ok(os1 && os2, 'create() should succeed both as create and as open');
+
+    const hdrs = natsHeaders();
+    hdrs.set('content-type', 'text/plain');
+
+    const payload = Buffer.from('hello object store');
+    const info = await os1.putBlob(
+      { name: 'greeting.txt', headers: hdrs },
+      payload
+    );
+    assert.equal(info.name, 'greeting.txt');
+    assert.equal(info.size, payload.length);
+
+    const got = await os1.get('greeting.txt');
+    assert.ok(got, 'get() should find the object just put');
+    const chunks = [];
+    for await (const chunk of got.data) chunks.push(chunk);
+    assert.equal(Buffer.concat(chunks).toString('utf8'), 'hello object store');
+    assert.equal(got.info.headers.get('content-type'), 'text/plain');
+
+    // Bug 5: list() resolves to a plain array, not an async iterable.
+    const listed = await os1.list();
+    assert.ok(Array.isArray(listed), 'list() must resolve to a plain array');
+    assert.ok(listed.some(o => o.name === 'greeting.txt'));
+
+    // Objm#list() (the Kvm-equivalent for Object Store buckets) replaces
+    // the hand-rolled OBJ_-prefix stream filtering the node code used to do.
+    const buckets = [];
+    for await (const status of objm.list()) buckets.push(status);
+    assert.ok(
+      buckets.some(b => b.bucket === bucket),
+      'Objm#list() should surface the bucket by its plain (unprefixed) name'
+    );
+  } finally {
+    await cleanup(nc, bucket);
+  }
+});
+
+test('object store: bucket-info/bucket-list count fields (object-put.js admin ops)', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const bucket = `test_obj_admin_${Date.now().toString(36)}`;
+  const nc = await connectDirectNats();
+
+  try {
+    const objm = new Objm(nc);
+    const os = await objm.create(bucket);
+    const before = (await os.status()).streamInfo.state.messages;
+
+    await os.putBlob({ name: 'a.txt' }, Buffer.from('a'));
+    await os.putBlob({ name: 'b.txt' }, Buffer.from('b'));
+
+    const objects = await os.list();
+    assert.equal(
+      objects.length,
+      2,
+      'object count must count objects, not backing stream messages'
+    );
+
+    const afterPuts = await os.status();
+    assert.equal(afterPuts.bucket, bucket);
+    assert.equal(typeof afterPuts.size, 'number');
+    assert.ok(
+      afterPuts.streamInfo.state.messages > before,
+      'messages should grow after putBlob calls'
+    );
+
+    await os.delete('a.txt');
+    const afterDelete = await os.status();
+    // num_deleted is absent (not 0) when the server has nothing to report -
+    // matches why object-put.js's bucket-info reads it with `|| 0`.
+    assert.ok(
+      afterDelete.streamInfo.state.num_deleted === undefined ||
+        typeof afterDelete.streamInfo.state.num_deleted === 'number'
+    );
+
+    const buckets = [];
+    for await (const s of objm.list()) buckets.push(s);
+    const listed = buckets.find(b => b.bucket === bucket);
+    assert.ok(listed, 'objm.list() should surface the bucket');
+    assert.equal(
+      listed.streamInfo.state.messages,
+      afterDelete.streamInfo.state.messages,
+      'objm.list() and os.status() should agree'
+    );
+  } finally {
+    await cleanup(nc, bucket);
+  }
+});

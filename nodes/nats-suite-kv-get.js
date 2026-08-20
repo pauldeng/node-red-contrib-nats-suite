@@ -1,5 +1,7 @@
 'use strict';
 
+const { Kvm } = require('@nats-io/kv');
+
 module.exports = function (RED) {
   function UnsKvGetNode(config) {
     RED.nodes.createNode(this, config);
@@ -45,39 +47,35 @@ module.exports = function (RED) {
     let isWatching = false;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
-    // Helper: Get or create KV bucket
+    // Helper: Get or create KV bucket. Kvm#create() is create-or-open (a
+    // no-op if the bucket already exists), so it replaces the old
+    // try-bare-open-then-create-with-options fallback outright.
     const getKVBucket = async () => {
       if (kvStore) return kvStore;
 
       try {
-        const nc = await node.serverConfig.getConnection();
-        const js = nc.jetstream();
-
-        try {
-          kvStore = await js.views.kv(node.bucket);
-          return kvStore;
-        } catch (err) {
-          if (node.bucketConfig) {
-            kvStore = await node.bucketConfig.getKVBucket();
-          } else {
-            const createOptions = {
-              history: node.history,
-              max_age: node.maxAge * 1000,
-              max_bytes: node.maxBytes || undefined,
-              max_value_size: node.maxValueSize || undefined,
-              compression: node.compression,
-              replicas: node.replicas,
-              storage: node.storage === 'memory' ? 'memory' : 'file',
-            };
-
-            Object.keys(createOptions).forEach(key => {
-              if (createOptions[key] === undefined) delete createOptions[key];
-            });
-
-            kvStore = await js.views.kv(node.bucket, createOptions);
-          }
+        if (node.bucketConfig) {
+          kvStore = await node.bucketConfig.getKVBucket();
           return kvStore;
         }
+
+        const nc = await node.serverConfig.getConnection();
+        const createOptions = {
+          history: node.history,
+          ttl: node.maxAge * 1000,
+          max_bytes: node.maxBytes || undefined,
+          maxValueSize: node.maxValueSize || undefined,
+          compression: node.compression,
+          replicas: node.replicas,
+          storage: node.storage === 'memory' ? 'memory' : 'file',
+        };
+
+        Object.keys(createOptions).forEach(key => {
+          if (createOptions[key] === undefined) delete createOptions[key];
+        });
+
+        kvStore = await new Kvm(nc).create(node.bucket, createOptions);
+        return kvStore;
       } catch (err) {
         node.error(`Failed to get KV bucket: ${err.message}`);
         throw err;
@@ -91,7 +89,7 @@ module.exports = function (RED) {
       if (typeof value === 'string') {
         try {
           return JSON.parse(value);
-        } catch (e) {
+        } catch {
           // Not JSON, return as-is
           return value;
         }
@@ -101,98 +99,87 @@ module.exports = function (RED) {
 
     // Helper: Get single key
     const getValue = async key => {
-      try {
-        const kv = await getKVBucket();
-        const entry = await kv.get(key);
+      const kv = await getKVBucket();
+      const entry = await kv.get(key);
 
-        if (!entry) {
-          return null;
-        }
-
-        const value = entry.string();
-        const parsedValue = parseValue(value);
-
-        const result = {
-          payload: parsedValue,
-          key: key,
-          operation: 'GET',
-          revision: entry.revision,
-          created: entry.created ? new Date(entry.created).toISOString() : null,
-          bucket: node.bucket,
-        };
-
-        // Include history if requested
-        if (config.includeHistory) {
-          try {
-            const limit = parseInt(config.historyLimit) || 1;
-
-            if (isDebug) {
-              node.log(
-                `[KV GET] History - config.historyLimit: ${JSON.stringify(config.historyLimit)} (type: ${typeof config.historyLimit}), parsed limit: ${limit}`
-              );
-            }
-
-            const history = await kv.history({ key });
-            const historyArray = [];
-
-            for await (const h of history) {
-              if (isDebug) {
-                node.log(
-                  `[KV GET] History entry #${historyArray.length + 1} - revision: ${h.revision}, operation: ${h.operation}, key: ${h.key}`
-                );
-              }
-              historyArray.push({
-                revision: h.revision,
-                value: parseValue(h.string()),
-                created: h.created ? new Date(h.created).toISOString() : null,
-                operation: h.operation,
-              });
-              if (limit > 0 && historyArray.length >= limit) {
-                break;
-              }
-            }
-
-            if (isDebug) {
-              node.log(
-                `[KV GET] History collected ${historyArray.length} entries (limit was ${limit})`
-              );
-            }
-
-            result._history = historyArray;
-          } catch (histErr) {
-            node.warn(`Failed to get history: ${histErr.message}`);
-          }
-        }
-
-        return result;
-      } catch (err) {
-        if (err.message && err.message.includes('no message found')) {
-          return null; // Key doesn't exist
-        }
-        throw err;
+      if (!entry) {
+        return null;
       }
+
+      const value = entry.string();
+      const parsedValue = parseValue(value);
+
+      const result = {
+        payload: parsedValue,
+        key: key,
+        operation: 'GET',
+        revision: entry.revision,
+        created: entry.created ? new Date(entry.created).toISOString() : null,
+        bucket: node.bucket,
+      };
+
+      // Include history if requested
+      if (config.includeHistory) {
+        try {
+          const limit = parseInt(config.historyLimit) || 1;
+
+          if (isDebug) {
+            node.log(
+              `[KV GET] History - config.historyLimit: ${JSON.stringify(config.historyLimit)} (type: ${typeof config.historyLimit}), parsed limit: ${limit}`
+            );
+          }
+
+          const history = await kv.history({ key });
+          const historyArray = [];
+
+          for await (const h of history) {
+            if (isDebug) {
+              node.log(
+                `[KV GET] History entry #${historyArray.length + 1} - revision: ${h.revision}, operation: ${h.operation}, key: ${h.key}`
+              );
+            }
+            historyArray.push({
+              revision: h.revision,
+              value: parseValue(h.string()),
+              created: h.created ? new Date(h.created).toISOString() : null,
+              operation: h.operation,
+            });
+            if (limit > 0 && historyArray.length >= limit) {
+              break;
+            }
+          }
+
+          if (isDebug) {
+            node.log(
+              `[KV GET] History collected ${historyArray.length} entries (limit was ${limit})`
+            );
+          }
+
+          result._history = historyArray;
+        } catch (histErr) {
+          node.warn(`Failed to get history: ${histErr.message}`);
+        }
+      }
+
+      return result;
     };
 
     // Helper: List all keys
     const listKeys = async () => {
-      try {
-        const kv = await getKVBucket();
-        const keys = await kv.keys();
-        const keyArray = [];
+      const kv = await getKVBucket();
+      const keys = await kv.keys();
+      const keyArray = [];
 
-        for await (const key of keys) {
-          keyArray.push(key);
-        }
-
-        return {
-          payload: keyArray,
-          operation: 'LIST',
-          bucket: node.bucket,
-          count: keyArray.length,
-        };
-      } catch (err) {
-        throw err;
+      for await (const key of keys) {
+        keyArray.push(key);
       }
+
+      return {
+        payload: keyArray,
+        operation: 'LIST',
+        bucket: node.bucket,
+        count: keyArray.length,
+      };
     };
 
     // Helper: Start watching keys

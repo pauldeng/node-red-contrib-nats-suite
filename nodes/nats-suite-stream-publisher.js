@@ -1,6 +1,12 @@
 'use strict';
 
-const { StringCodec, headers: natsHeaders } = require('nats');
+const { headers: natsHeaders } = require('@nats-io/nats-core');
+const {
+  JetStreamApiCodes,
+  JetStreamApiError,
+  jetstream,
+  jetstreamManager,
+} = require('@nats-io/jetstream');
 
 module.exports = function (RED) {
   function UnsStreamPublisherNode(config) {
@@ -30,9 +36,8 @@ module.exports = function (RED) {
 
     let jsClient = null;
     let jsm = null;
-    let streamInfo = null;
+    let streamReady = false;
     let statusRevertTimer = null;
-    const sc = StringCodec();
 
     // Helper: Update node status based on connection state
     const updateConnectionStatus = () => {
@@ -63,8 +68,8 @@ module.exports = function (RED) {
     const ensureJetStream = async () => {
       if (jsClient && jsm) return;
       const nc = await node.serverConfig.getConnection();
-      jsClient = nc.jetstream();
-      jsm = await nc.jetstreamManager();
+      jsClient = jetstream(nc);
+      jsm = await jetstreamManager(nc);
     };
 
     // Helper: Parse subject patterns (comma-separated or array)
@@ -111,12 +116,27 @@ module.exports = function (RED) {
 
         // Try to get existing stream
         try {
-          streamInfo = await jsm.streams.info(config.streamName);
+          const info = await jsm.streams.info(config.streamName);
+          if (
+            (config.allowMsgTtl && !info.config.allow_msg_ttl) ||
+            (config.allowMsgSchedules && !info.config.allow_msg_schedules)
+          ) {
+            await jsm.streams.update(config.streamName, {
+              ...info.config,
+              allow_msg_ttl: info.config.allow_msg_ttl || !!config.allowMsgTtl,
+              allow_msg_schedules:
+                info.config.allow_msg_schedules || !!config.allowMsgSchedules,
+            });
+          }
+          streamReady = true;
           node.log(`[STREAM PUB] Stream exists: ${config.streamName}`);
           return true;
         } catch (err) {
           // Stream doesn't exist, create it
-          if (err.message && err.message.includes('stream not found')) {
+          if (
+            err instanceof JetStreamApiError &&
+            err.code === JetStreamApiCodes.StreamNotFound
+          ) {
             node.log(`[STREAM PUB] Creating stream: ${config.streamName}`);
 
             const streamConfig = {
@@ -130,10 +150,22 @@ module.exports = function (RED) {
               duplicate_window: parseDuration(config.duplicateWindow || '2m'),
               num_replicas: parseInt(config.replicas, 10) || 1,
               discard: 'old', // Discard old messages when limits reached
+              max_consumers: parseInt(config.maxConsumers, 10) || -1,
+              max_msgs_per_subject:
+                parseInt(config.maxMsgsPerSubject, 10) || -1,
+              max_msg_size: parseInt(config.maxMsgSize, 10) || -1,
+              compression: config.compression || 'none',
+              allow_direct: !!config.allowDirect,
+              mirror_direct: !!config.mirrorDirect,
+              deny_delete: !!config.denyDelete,
+              deny_purge: !!config.denyPurge,
+              allow_rollup_hdrs: !!config.allowRollupHdrs,
+              allow_msg_ttl: !!config.allowMsgTtl,
+              allow_msg_schedules: !!config.allowMsgSchedules,
             };
 
             await jsm.streams.add(streamConfig);
-            streamInfo = await jsm.streams.info(config.streamName);
+            streamReady = true;
 
             node.log(`[STREAM PUB] Stream created: ${config.streamName}`);
 
@@ -152,6 +184,7 @@ module.exports = function (RED) {
           throw err;
         }
       } catch (err) {
+        streamReady = false;
         node.error(`Failed to ensure stream: ${err.message}`);
 
         // Show error status for 2 seconds
@@ -294,10 +327,6 @@ module.exports = function (RED) {
                   msg.mirrorDirect !== undefined
                     ? msg.mirrorDirect
                     : config.mirrorDirect || false,
-                sealed:
-                  msg.sealed !== undefined
-                    ? msg.sealed
-                    : config.sealed || false,
                 deny_delete:
                   msg.denyDelete !== undefined
                     ? msg.denyDelete
@@ -314,6 +343,10 @@ module.exports = function (RED) {
                   msg.allowMsgTtl !== undefined
                     ? msg.allowMsgTtl
                     : config.allowMsgTtl || false,
+                allow_msg_schedules:
+                  msg.allowMsgSchedules !== undefined
+                    ? msg.allowMsgSchedules
+                    : config.allowMsgSchedules || false,
               };
               node.log(
                 `[STREAM PUB] Creating stream from properties: ${streamConfig.name}`
@@ -365,6 +398,14 @@ module.exports = function (RED) {
             ) {
               // Merge msg.payload with current config (NATS native format)
               streamConfig = { ...currentStream.config, ...msg.payload };
+              streamConfig.sealed =
+                currentStream.config.sealed || streamConfig.sealed;
+              streamConfig.allow_msg_ttl =
+                currentStream.config.allow_msg_ttl ||
+                streamConfig.allow_msg_ttl;
+              streamConfig.allow_msg_schedules =
+                currentStream.config.allow_msg_schedules ||
+                streamConfig.allow_msg_schedules;
               node.log(
                 `[STREAM PUB] Updating stream from payload config: ${streamConfig.name}`
               );
@@ -471,11 +512,13 @@ module.exports = function (RED) {
                       ? config.allowRollupHdrs
                       : currentStream.config.allow_rollup_hdrs,
                 allow_msg_ttl:
-                  msg.allowMsgTtl !== undefined
-                    ? msg.allowMsgTtl
-                    : config.allowMsgTtl !== undefined
-                      ? config.allowMsgTtl
-                      : currentStream.config.allow_msg_ttl,
+                  currentStream.config.allow_msg_ttl ||
+                  msg.allowMsgTtl === true ||
+                  config.allowMsgTtl === true,
+                allow_msg_schedules:
+                  currentStream.config.allow_msg_schedules ||
+                  msg.allowMsgSchedules === true ||
+                  config.allowMsgSchedules === true,
               };
               node.log(
                 `[STREAM PUB] Updating stream from properties: ${streamConfig.name}`
@@ -539,7 +582,7 @@ module.exports = function (RED) {
           case 'info': {
             const targetStreamName =
               msg.payload?.name || msg.stream || streamName;
-            const info = await jsm.streams.info(targetStreamName);
+            const info = await jsm.streams.info(targetStreamName, msg.options);
             msg.payload = {
               operation: 'info',
               success: true,
@@ -576,8 +619,10 @@ module.exports = function (RED) {
           }
 
           case 'purge': {
-            const stream = await jsClient.streams.get(streamName);
-            await stream.purge();
+            // jsClient.streams.get(name) returns a Stream with no .purge() -
+            // only JetStreamManager.streams has it (verified against
+            // @nats-io/jetstream 3.4.0 types).
+            await jsm.streams.purge(streamName, msg.options);
             msg.payload = {
               operation: 'purge',
               stream: streamName,
@@ -588,7 +633,7 @@ module.exports = function (RED) {
 
           case 'list': {
             const streams = [];
-            for await (const stream of jsm.streams.list()) {
+            for await (const stream of jsm.streams.list(msg.subject)) {
               streams.push({
                 name: stream.config.name,
                 subjects: stream.config.subjects,
@@ -634,7 +679,7 @@ module.exports = function (RED) {
         }
 
         // Ensure we have a JetStream client
-        if (!jsClient) {
+        if (!streamReady) {
           const ready = await ensureStream();
           if (!ready) {
             node.error('Stream not ready', msg);
@@ -653,12 +698,12 @@ module.exports = function (RED) {
         }
 
         // Prepare payload
-        let payload;
-        if (typeof msg.payload === 'object') {
-          payload = JSON.stringify(msg.payload);
-        } else {
-          payload = String(msg.payload);
-        }
+        const payload =
+          msg.payload instanceof Uint8Array
+            ? msg.payload
+            : typeof msg.payload === 'object'
+              ? JSON.stringify(msg.payload)
+              : String(msg.payload);
 
         // Prepare headers if provided
         let msgHeaders;
@@ -669,11 +714,17 @@ module.exports = function (RED) {
           });
         }
 
-        // Publish to stream
-        const pubAck = await jsClient.publish(subject, sc.encode(payload), {
-          headers: msgHeaders,
-          msgID: msg._msgID || undefined, // Optional message ID for deduplication
-        });
+        // Pass native JetStreamPublishOptions through so new client options
+        // don't require a new node release. Direct schedule aliases keep
+        // delayed delivery convenient in Node-RED flows.
+        const publishOptions = { ...msg.options };
+        if (msgHeaders) publishOptions.headers = msgHeaders;
+        if (msg._msgID !== undefined) publishOptions.msgID = msg._msgID;
+        if (msg.schedule !== undefined) publishOptions.schedule = msg.schedule;
+        if (msg.cancelSchedule !== undefined)
+          publishOptions.cancelSchedule = msg.cancelSchedule;
+
+        const pubAck = await jsClient.publish(subject, payload, publishOptions);
 
         // Update message with publish info
         msg.stream = pubAck.stream;
@@ -684,11 +735,6 @@ module.exports = function (RED) {
 
         // Send message to output
         node.send(msg);
-
-        // Periodically update stream info (every 100 messages)
-        if (pubAck.seq % 100 === 0) {
-          ensureStream(); // Refresh stats
-        }
       } catch (err) {
         msg.published = false;
         msg.error = err.message;
@@ -710,7 +756,7 @@ module.exports = function (RED) {
       this.serverConfig.unregisterConnectionUser(node.id);
       jsClient = null;
       jsm = null;
-      streamInfo = null;
+      streamReady = false;
       node.status({});
       done();
     });

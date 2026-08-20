@@ -1,7 +1,7 @@
 {
   "name": "node-red-contrib-nats-suite",
   "version": "0.2.2",
-  "description": "A comprehensive Node-RED module for NATS (Core, JetStream, KV, Object Store, Service API) \u2013 generic NATS integration for Node-RED.",
+  "description": "A comprehensive Node-RED module for NATS (Core, JetStream, KV, Object Store, Service API) – generic NATS integration for Node-RED.",
   "keywords": [
     "node-red",
     "nats",
@@ -49,8 +49,12 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@nats-io/transport-node": "3.4.0",
-    "nats": "^2.29.3"
+    "@nats-io/jetstream": "3.4.0",
+    "@nats-io/kv": "3.4.0",
+    "@nats-io/nats-core": "3.4.0",
+    "@nats-io/obj": "3.4.0",
+    "@nats-io/services": "3.4.0",
+    "@nats-io/transport-node": "3.4.0"
   },
   "engines": {
     "node": ">=22.9.0"

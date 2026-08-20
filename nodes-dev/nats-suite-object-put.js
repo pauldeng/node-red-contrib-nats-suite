@@ -1,5 +1,8 @@
 'use strict';
 
+const { Objm } = require('@nats-io/obj');
+const { nanos, headers: natsHeaders } = require('@nats-io/nats-core');
+
 module.exports = function (RED) {
   function NatsObjectPutNode(config) {
     RED.nodes.createNode(this, config);
@@ -21,8 +24,10 @@ module.exports = function (RED) {
 
     // Bucket configuration - can use bucketConfig node OR direct settings
     this.bucket = config.bucket || '';
-    this.bucketConfig = config.bucketConfig ? RED.nodes.getNode(config.bucketConfig) : null;
-    
+    this.bucketConfig = config.bucketConfig
+      ? RED.nodes.getNode(config.bucketConfig)
+      : null;
+
     // If bucketConfig node exists, use it; otherwise use direct settings
     if (this.bucketConfig) {
       this.bucket = this.bucketConfig.bucket;
@@ -40,42 +45,47 @@ module.exports = function (RED) {
     let objectStore = null;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
-    // Helper: Get or create Object Store
+    // ObjectInfo.headers is a MsgHdrs instance (@nats-io/nats-core), not a
+    // plain object - flatten it so msg.info stays JSON-serializable.
+    // ponytail: hdrs.get() returns only the last value per key, so a
+    // multi-valued header collapses to one string - matches how the rest of
+    // this codebase treats headers. Switch to hdrs.values(key) if a caller
+    // ever needs every value.
+    const headersToObject = hdrs => {
+      if (!hdrs) return {};
+      const obj = {};
+      for (const key of hdrs.keys()) obj[key] = hdrs.get(key);
+      return obj;
+    };
+
+    // Helper: Get or create Object Store. Objm#create() is create-or-open
+    // (a no-op if the bucket already exists), so it replaces the old
+    // try-bare-open-then-create fallback.
     const getObjectStore = async () => {
       if (objectStore) return objectStore;
-      
+
       try {
-        const nc = await node.serverConfig.getConnection();
-        const js = nc.jetstream();
-        
-        // Try to open existing bucket first
-        try {
-          objectStore = await js.views.os(node.bucket);
-          return objectStore;
-        } catch (err) {
-          // Bucket doesn't exist, create it
-          if (node.bucketConfig) {
-            // Use bucket config node
-            objectStore = await node.bucketConfig.getObjectStore();
-          } else {
-            // Use direct settings
-            const createOptions = {
-              description: node.description || undefined,
-              max_bytes: node.maxBytes || undefined,
-              max_age: node.maxAge * 1000 || undefined,
-              storage: node.storage === 'memory' ? 'memory' : 'file',
-              replicas: node.replicas,
-              compression: node.compression
-            };
-            
-            Object.keys(createOptions).forEach(key => {
-              if (createOptions[key] === undefined) delete createOptions[key];
-            });
-            
-            objectStore = await js.views.os(node.bucket, createOptions);
-          }
+        if (node.bucketConfig) {
+          objectStore = await node.bucketConfig.getObjectStore();
           return objectStore;
         }
+
+        const nc = await node.serverConfig.getConnection();
+        const createOptions = {
+          description: node.description || undefined,
+          max_bytes: node.maxBytes || undefined,
+          ttl: node.maxAge ? nanos(node.maxAge * 1000) : undefined,
+          storage: node.storage === 'memory' ? 'memory' : 'file',
+          replicas: node.replicas,
+          compression: node.compression,
+        };
+
+        Object.keys(createOptions).forEach(key => {
+          if (createOptions[key] === undefined) delete createOptions[key];
+        });
+
+        objectStore = await new Objm(nc).create(node.bucket, createOptions);
+        return objectStore;
       } catch (err) {
         node.error(`Failed to get Object Store: ${err.message}`);
         throw err;
@@ -83,11 +93,11 @@ module.exports = function (RED) {
     };
 
     // Bucket Management Operations
-    const performBucketOperation = async (msg) => {
+    const performBucketOperation = async msg => {
       try {
         const nc = await node.serverConfig.getConnection();
-        const js = nc.jetstream();
-        
+        const objm = new Objm(nc);
+
         const operation = msg.operation || config.operation || 'put';
         const bucketName = msg.bucket || node.bucket || '';
 
@@ -100,63 +110,96 @@ module.exports = function (RED) {
           case 'bucket-create': {
             const createOptions = {
               description: msg.description || node.description || undefined,
-              max_bytes: msg.maxBytes ? parseInt(msg.maxBytes, 10) : (node.maxBytes || undefined),
-              max_age: msg.maxAge ? parseInt(msg.maxAge, 10) * 1000 : (node.maxAge ? node.maxAge * 1000 : undefined),
-              storage: msg.storage || node.storage === 'memory' ? 'memory' : 'file',
-              replicas: msg.replicas ? parseInt(msg.replicas, 10) : (node.replicas || 1),
-              compression: msg.compression !== undefined ? !!msg.compression : node.compression
+              max_bytes: msg.maxBytes
+                ? parseInt(msg.maxBytes, 10)
+                : node.maxBytes || undefined,
+              ttl: msg.maxAge
+                ? nanos(parseInt(msg.maxAge, 10) * 1000)
+                : node.maxAge
+                  ? nanos(node.maxAge * 1000)
+                  : undefined,
+              storage:
+                msg.storage || node.storage === 'memory' ? 'memory' : 'file',
+              replicas: msg.replicas
+                ? parseInt(msg.replicas, 10)
+                : node.replicas || 1,
+              compression:
+                msg.compression !== undefined
+                  ? !!msg.compression
+                  : node.compression,
             };
 
             Object.keys(createOptions).forEach(key => {
               if (createOptions[key] === undefined) delete createOptions[key];
             });
 
-            await js.views.os(bucketName, createOptions);
-            msg.payload = { operation: 'bucket-create', bucket: bucketName, success: true };
-            node.status({ fill: 'green', shape: 'dot', text: `created: ${bucketName}` });
+            await objm.create(bucketName, createOptions);
+            msg.payload = {
+              operation: 'bucket-create',
+              bucket: bucketName,
+              success: true,
+            };
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `created: ${bucketName}`,
+            });
             break;
           }
 
           case 'bucket-info': {
-            const os = await js.views.os(bucketName);
+            const os = await objm.create(bucketName);
             const status = await os.status();
+            const objects = await os.list();
             msg.payload = {
               operation: 'bucket-info',
               bucket: bucketName,
               size: status.size || 0,
-              objects: status.object_count || 0,
-              deleted: status.deleted || 0
+              objects: objects.length,
+              deleted: status.streamInfo.state.num_deleted || 0,
             };
             node.status({ fill: 'green', shape: 'dot', text: bucketName });
             break;
           }
 
           case 'bucket-delete': {
-            const os = await js.views.os(bucketName);
+            const os = await objm.create(bucketName);
             await os.destroy();
-            msg.payload = { operation: 'bucket-delete', bucket: bucketName, success: true };
-            node.status({ fill: 'green', shape: 'dot', text: `deleted: ${bucketName}` });
+            msg.payload = {
+              operation: 'bucket-delete',
+              bucket: bucketName,
+              success: true,
+            };
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `deleted: ${bucketName}`,
+            });
             break;
           }
 
           case 'bucket-list': {
+            const statuses = [];
+            for await (const status of objm.list()) {
+              statuses.push(status);
+            }
             const buckets = [];
-            // List all streams and filter Object Store buckets (they start with "OBJ_")
-            const jsm = await nc.jetstreamManager();
-            for await (const stream of jsm.streams.list()) {
-              if (stream.config.name.startsWith('OBJ_')) {
-                const bucketName = stream.config.name.replace('OBJ_', '');
-                buckets.push({
-                  name: bucketName,
-                  objects: stream.state.messages || 0,
-                  bytes: stream.state.bytes || 0
-                });
-              }
+            for (const status of statuses) {
+              const os = await objm.open(status.bucket);
+              buckets.push({
+                name: status.bucket,
+                objects: (await os.list()).length,
+                bytes: status.size || 0,
+              });
             }
             msg.payload = buckets;
             msg.operation = 'bucket-list';
             msg.count = buckets.length;
-            node.status({ fill: 'green', shape: 'dot', text: `${buckets.length} buckets` });
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `${buckets.length} buckets`,
+            });
             break;
           }
 
@@ -184,8 +227,15 @@ module.exports = function (RED) {
       try {
         // Check if this is a bucket management operation
         const operation = msg.operation || config.operation || 'put';
-        
-        if (['bucket-create', 'bucket-info', 'bucket-delete', 'bucket-list'].includes(operation)) {
+
+        if (
+          [
+            'bucket-create',
+            'bucket-info',
+            'bucket-delete',
+            'bucket-list',
+          ].includes(operation)
+        ) {
           await performBucketOperation(msg);
           return;
         }
@@ -221,7 +271,11 @@ module.exports = function (RED) {
           msg.success = true;
 
           node.send(msg);
-          node.status({ fill: 'green', shape: 'dot', text: `deleted: ${objectName}` });
+          node.status({
+            fill: 'green',
+            shape: 'dot',
+            text: `deleted: ${objectName}`,
+          });
           return;
         }
 
@@ -249,10 +303,11 @@ module.exports = function (RED) {
         if (config.dataFrom === 'payload') {
           data = msg.payload;
         } else if (config.dataFrom === 'buffer') {
-          data = Buffer.isBuffer(msg.payload) ? msg.payload : Buffer.from(String(msg.payload));
+          data = Buffer.isBuffer(msg.payload)
+            ? msg.payload
+            : Buffer.from(String(msg.payload));
         } else if (config.dataFrom === 'file') {
           const fs = require('fs');
-          const path = require('path');
           const filePath = msg.filePath || config.filePath;
           if (!filePath) {
             node.error('No file path specified', msg);
@@ -291,26 +346,46 @@ module.exports = function (RED) {
           metadata['content-type'] = config.contentType;
         }
 
-        // Upload object
-        const info = await os.put({
-          name: objectName,
-          description: metadata.description,
-          headers: metadata
-        }, data);
-
-        if (isDebug) {
-          node.log(`[OBJECT PUT] Upload successful - Name: ${objectName}, Size: ${info.size}, Chunks: ${info.chunks}`);
+        // Upload object. putBlob() takes the fully-buffered bytes directly;
+        // put() wants a ReadableStream, which we don't have here. headers
+        // must be a MsgHdrs instance, not a plain object.
+        let msgHeaders;
+        const headerEntries = Object.entries(metadata).filter(
+          ([k]) => k !== 'description'
+        );
+        if (headerEntries.length > 0) {
+          msgHeaders = natsHeaders();
+          headerEntries.forEach(([k, v]) => msgHeaders.set(k, String(v)));
         }
 
-        msg.info = info;
+        const info = await os.putBlob(
+          {
+            name: objectName,
+            description: metadata.description,
+            headers: msgHeaders,
+          },
+          data
+        );
+
+        if (isDebug) {
+          node.log(
+            `[OBJECT PUT] Upload successful - Name: ${objectName}, Size: ${info.size}, Chunks: ${info.chunks}`
+          );
+        }
+
+        msg.info = { ...info, headers: headersToObject(info.headers) };
         msg.operation = 'PUT';
         msg.objectName = objectName;
         msg.bucket = node.bucket;
         msg.size = info.size;
         msg.chunks = info.chunks;
-        
+
         node.send(msg);
-        node.status({ fill: 'green', shape: 'dot', text: `put: ${objectName}` });
+        node.status({
+          fill: 'green',
+          shape: 'dot',
+          text: `put: ${objectName}`,
+        });
       } catch (err) {
         node.error(`Object Store PUT failed: ${err.message}`, msg);
         msg.error = err.message;
@@ -328,4 +403,3 @@ module.exports = function (RED) {
 
   RED.nodes.registerType('nats-suite-object-put', NatsObjectPutNode);
 };
-

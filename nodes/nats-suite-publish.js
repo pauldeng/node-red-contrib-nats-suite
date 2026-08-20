@@ -1,12 +1,11 @@
 'use strict';
 
-const { StringCodec, headers: natsHeaders } = require('nats');
+const { TimeoutError, headers: natsHeaders } = require('@nats-io/nats-core');
 
 module.exports = function (RED) {
   function NatsPublishNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
-    const sc = StringCodec();
 
     const isDebug = !!config.debug;
     const mode = config.mode || 'publish';
@@ -15,8 +14,10 @@ module.exports = function (RED) {
     const requestFallbackToPublish = config.requestFallbackToPublish !== false;
     const enableAutoReply = mode === 'reply' && !!config.enableAutoReply;
 
-    const setStatusRed = () => node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
-    const setStatusGreen = () => node.status({ fill: 'green', shape: 'dot', text: 'connected' });
+    const setStatusRed = () =>
+      node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
+    const setStatusGreen = () =>
+      node.status({ fill: 'green', shape: 'dot', text: 'connected' });
 
     let connectionTimeout = null;
     let connectionStartTime = null;
@@ -25,18 +26,22 @@ module.exports = function (RED) {
     setStatusRed();
 
     if (!config.server) {
-      node.error('NATS server configuration not selected. Please select a NATS server node.');
+      node.error(
+        'NATS server configuration not selected. Please select a NATS server node.'
+      );
       return;
     }
 
     this.config = RED.nodes.getNode(config.server);
 
     if (!this.config) {
-      node.error('NATS server configuration not found. Please configure a NATS server node.');
+      node.error(
+        'NATS server configuration not found. Please configure a NATS server node.'
+      );
       return;
     }
 
-    const statusListener = (statusInfo) => {
+    const statusListener = statusInfo => {
       const status = statusInfo.status || statusInfo; // Backward compatibility
       switch (status) {
         case 'connected':
@@ -51,15 +56,27 @@ module.exports = function (RED) {
             clearTimeout(connectionTimeout);
             connectionTimeout = null;
           }
-          node.status({ fill: 'red', shape: 'ring', text: `disconnected (${statusInfo.reconnectAttempts || 0})` });
+          node.status({
+            fill: 'red',
+            shape: 'ring',
+            text: `disconnected (${statusInfo.reconnectAttempts || 0})`,
+          });
           break;
         case 'connecting':
-          node.status({ fill: 'yellow', shape: 'ring', text: `connecting (${statusInfo.reconnectAttempts || 0})` });
+          node.status({
+            fill: 'yellow',
+            shape: 'ring',
+            text: `connecting (${statusInfo.reconnectAttempts || 0})`,
+          });
           connectionStartTime = Date.now();
           if (connectionTimeout) clearTimeout(connectionTimeout);
           connectionTimeout = setTimeout(() => {
-            const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
-            node.warn(`NATS connection taking longer than expected (${elapsed}s). Check server availability.`);
+            const elapsed = Math.floor(
+              (Date.now() - connectionStartTime) / 1000
+            );
+            node.warn(
+              `NATS connection taking longer than expected (${elapsed}s). Check server availability.`
+            );
           }, 10000);
           break;
         default:
@@ -91,7 +108,9 @@ module.exports = function (RED) {
           if (typeof payload === 'string') return Buffer.from(payload);
           return Buffer.from(JSON.stringify(payload));
         case 'json':
-          return typeof payload === 'object' ? JSON.stringify(payload) : String(payload);
+          return typeof payload === 'object'
+            ? JSON.stringify(payload)
+            : String(payload);
         default:
           return undefined;
       }
@@ -105,7 +124,9 @@ module.exports = function (RED) {
         try {
           Object.assign(headersObj, JSON.parse(config.headers));
         } catch (err) {
-          node.warn(`[NATS-SUITE PUBLISH] Failed to parse static headers: ${err.message}`);
+          node.warn(
+            `[NATS-SUITE PUBLISH] Failed to parse static headers: ${err.message}`
+          );
         }
       }
       if (msg.headers && typeof msg.headers === 'object') {
@@ -113,7 +134,9 @@ module.exports = function (RED) {
       }
       if (Object.keys(headersObj).length === 0) return undefined;
       const msgHeaders = natsHeaders();
-      Object.keys(headersObj).forEach((key) => msgHeaders.append(key, String(headersObj[key])));
+      Object.keys(headersObj).forEach(key =>
+        msgHeaders.append(key, String(headersObj[key]))
+      );
       return msgHeaders;
     }
 
@@ -130,7 +153,10 @@ module.exports = function (RED) {
     // Returns null on success, or the error object to report via done(err).
     async function handleRequest(msg, send) {
       if (node.config.connectionStatus !== 'connected') {
-        msg.error = { message: 'Cannot send request - NATS server is not connected', code: 'NOT_CONNECTED' };
+        msg.error = {
+          message: 'Cannot send request - NATS server is not connected',
+          code: 'NOT_CONNECTED',
+        };
         send(msg);
         return msg.error;
       }
@@ -138,7 +164,9 @@ module.exports = function (RED) {
       const subject = resolveSubject(msg);
       if (!subject) {
         msg.error = {
-          message: 'No subject specified. Set subject in node config' + (enableTopicOverride ? ' or provide msg.topic' : ''),
+          message:
+            'No subject specified. Set subject in node config' +
+            (enableTopicOverride ? ' or provide msg.topic' : ''),
           code: 'NO_SUBJECT',
         };
         send(msg);
@@ -146,49 +174,70 @@ module.exports = function (RED) {
       }
 
       const natsnc = await node.config.getConnection();
-      const requestPayload = typeof msg.payload === 'object' ? JSON.stringify(msg.payload) : String(msg.payload);
+      const requestPayload =
+        typeof msg.payload === 'object'
+          ? JSON.stringify(msg.payload)
+          : String(msg.payload);
       const startTime = Date.now();
 
       node.status({ fill: 'blue', shape: 'ring', text: `request: ${subject}` });
 
       try {
-        const response = await natsnc.request(subject, sc.encode(requestPayload), { timeout: requestTimeout });
+        const response = await natsnc.request(subject, requestPayload, {
+          timeout: requestTimeout,
+        });
         const requestTime = Date.now() - startTime;
         let responsePayload;
         try {
-          responsePayload = JSON.parse(sc.decode(response.data));
+          responsePayload = response.json();
         } catch {
-          responsePayload = sc.decode(response.data);
+          responsePayload = response.string();
         }
         msg.payload = responsePayload;
         msg.requestTime = requestTime;
         msg.subject = response.subject;
         delete msg.error;
-        node.status({ fill: 'green', shape: 'dot', text: `reply: ${requestTime}ms` });
+        node.status({
+          fill: 'green',
+          shape: 'dot',
+          text: `reply: ${requestTime}ms`,
+        });
         restoreStatusSoon();
         send(msg);
         return null;
       } catch (requestErr) {
-        const isTimeout = requestErr.code === 'TIMEOUT' || (requestErr.message || '').includes('timeout');
+        const isTimeout = requestErr instanceof TimeoutError;
 
         if (isTimeout && requestFallbackToPublish) {
           try {
-            natsnc.publish(subject, sc.encode(requestPayload));
+            natsnc.publish(subject, requestPayload);
             msg.fallback = 'publish';
             msg.fallbackReason = 'request_timeout';
             delete msg.error;
-            node.status({ fill: 'green', shape: 'dot', text: 'fallback publish' });
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: 'fallback publish',
+            });
             restoreStatusSoon();
             send(msg);
             return null;
           } catch (publishErr) {
-            node.warn(`[NATS-SUITE PUBLISH] Request timeout fallback failed: ${publishErr.message}`);
+            node.warn(
+              `[NATS-SUITE PUBLISH] Request timeout fallback failed: ${publishErr.message}`
+            );
           }
         }
 
         msg.error = isTimeout
-          ? { message: `Request timeout after ${requestTimeout}ms`, code: 'TIMEOUT' }
-          : { message: requestErr.message || 'Request failed', code: requestErr.code || 'REQUEST_FAILED' };
+          ? {
+              message: `Request timeout after ${requestTimeout}ms`,
+              code: 'TIMEOUT',
+            }
+          : {
+              message: requestErr.message || 'Request failed',
+              code: requestErr.code || 'REQUEST_FAILED',
+            };
         node.status({
           fill: isTimeout ? 'yellow' : 'red',
           shape: 'ring',
@@ -214,7 +263,10 @@ module.exports = function (RED) {
         // when the processed response loops back through this same input
         if (enableAutoReply && !msg._autoReplyProcessed) {
           msg._autoReplyProcessed = true;
-          if (isDebug) node.log('[NATS-SUITE PUBLISH] Auto-reply: forwarded to output, awaiting response message');
+          if (isDebug)
+            node.log(
+              '[NATS-SUITE PUBLISH] Auto-reply: forwarded to output, awaiting response message'
+            );
           send(msg);
           done();
           return;
@@ -233,13 +285,16 @@ module.exports = function (RED) {
         const subject = resolveSubject(msg);
         if (!subject) {
           if (mode === 'reply') {
-            node.warn('Reply mode: no reply subject (msg._reply or msg._unsreply) found. Cannot send reply.');
+            node.warn(
+              'Reply mode: no reply subject (msg._reply or msg._unsreply) found. Cannot send reply.'
+            );
             done();
             return;
           }
           done(
             new Error(
-              'No subject specified. Set subject in node config' + (enableTopicOverride ? ' or provide msg.topic' : '')
+              'No subject specified. Set subject in node config' +
+                (enableTopicOverride ? ' or provide msg.topic' : '')
             )
           );
           return;
@@ -247,7 +302,11 @@ module.exports = function (RED) {
 
         const encoded = encodePayload(msg.payload);
         if (encoded === undefined) {
-          done(new Error(`Unknown data format: ${config.dataformat}. Use 'json', 'string', or 'buffer'`));
+          done(
+            new Error(
+              `Unknown data format: ${config.dataformat}. Use 'json', 'string', or 'buffer'`
+            )
+          );
           return;
         }
 
@@ -256,7 +315,7 @@ module.exports = function (RED) {
         const hdrs = buildHeaders(msg);
         if (hdrs) publishOptions.headers = hdrs;
 
-        natsnc.publish(subject, Buffer.isBuffer(encoded) ? encoded : sc.encode(encoded), publishOptions);
+        natsnc.publish(subject, encoded, publishOptions);
         if (isDebug) node.log(`[NATS-SUITE PUBLISH] Published to ${subject}`);
 
         send(msg);

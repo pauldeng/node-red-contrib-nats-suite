@@ -1,6 +1,11 @@
 'use strict';
 
-const { StringCodec } = require('nats');
+const {
+  JetStreamApiCodes,
+  JetStreamApiError,
+  jetstream,
+  jetstreamManager,
+} = require('@nats-io/jetstream');
 
 module.exports = function (RED) {
   function UnsStreamConsumerNode(config) {
@@ -40,7 +45,6 @@ module.exports = function (RED) {
     let isConsuming = false;
     let isPaused = false; // Pause state
     let idleTimeout = null; // Timer for idle status
-    const sc = StringCodec();
 
     const setGreenStatus = (text, shape = 'dot') => {
       if (node.serverConfig.connectionStatus !== 'connected') return false;
@@ -89,8 +93,8 @@ module.exports = function (RED) {
     const ensureJetStream = async () => {
       if (jsClient && jsm) return;
       const nc = await node.serverConfig.getConnection();
-      jsClient = nc.jetstream();
-      jsm = await nc.jetstreamManager();
+      jsClient = jetstream(nc);
+      jsm = await jetstreamManager(nc);
     };
 
     // Helper: Get or create consumer
@@ -102,9 +106,19 @@ module.exports = function (RED) {
         try {
           await jsm.streams.info(config.streamName);
         } catch (err) {
-          node.error(`Stream not found: ${config.streamName}`);
-          node.status({ fill: 'red', shape: 'ring', text: 'stream not found' });
-          return false;
+          if (
+            err instanceof JetStreamApiError &&
+            err.code === JetStreamApiCodes.StreamNotFound
+          ) {
+            node.error(`Stream not found: ${config.streamName}`);
+            node.status({
+              fill: 'red',
+              shape: 'ring',
+              text: 'stream not found',
+            });
+            return false;
+          }
+          throw err;
         }
 
         // Check if createOnInit is enabled (default to true for backwards compatibility)
@@ -119,7 +133,10 @@ module.exports = function (RED) {
           node.log(`[STREAM CONSUMER] Consumer exists: ${config.consumerName}`);
         } catch (err) {
           // Consumer doesn't exist
-          if (err.message && err.message.includes('consumer not found')) {
+          if (
+            err instanceof JetStreamApiError &&
+            err.code === JetStreamApiCodes.ConsumerNotFound
+          ) {
             if (createOnInit) {
               // Configure consumer
               const consumerConfig = {
@@ -196,7 +213,7 @@ module.exports = function (RED) {
     const processMessage = async (msg, jetMsg) => {
       try {
         // Decode payload
-        const data = sc.decode(jetMsg.data);
+        const data = jetMsg.string();
 
         if (isDebug) {
           node.log(
@@ -216,7 +233,7 @@ module.exports = function (RED) {
                 if (isDebug) {
                   node.log(`[STREAM CONSUMER] Parsed message as JSON`);
                 }
-              } catch (parseError) {
+              } catch {
                 // Keep as string (expected for non-JSON messages)
                 payload = data;
                 if (isDebug) {
@@ -280,7 +297,7 @@ module.exports = function (RED) {
             // Fallback to auto behavior
             try {
               payload = JSON.parse(data);
-            } catch (e) {
+            } catch {
               payload = data;
             }
             break;
@@ -389,15 +406,19 @@ module.exports = function (RED) {
     };
 
     // Helper: Consume messages
-    const consumeMessages = async (batchSize = 1) => {
+    const consumeMessages = async msg => {
       if (!consumer || isConsuming || isPaused) return;
 
       try {
         isConsuming = true;
 
-        const maxWait = parseInt(config.maxWait, 10) || 1000;
+        const maxWait =
+          parseInt(msg.options?.expires ?? config.maxWait, 10) || 1000;
         const batch =
-          parseInt(batchSize, 10) || parseInt(config.batchSize, 10) || 1;
+          parseInt(
+            msg.options?.max_messages ?? msg.batchSize ?? config.batchSize,
+            10
+          ) || 1;
 
         // Set waiting status (blue) before fetching
         node.status({
@@ -412,6 +433,7 @@ module.exports = function (RED) {
 
         // Fetch messages
         const messages = await consumer.fetch({
+          ...msg.options,
           max_messages: batch,
           expires: maxWait,
         });
@@ -486,7 +508,7 @@ module.exports = function (RED) {
 
         switch (operation) {
           case 'info': {
-            const streamInfo = await jsm.streams.info(streamName);
+            const streamInfo = await jsm.streams.info(streamName, msg.options);
             msg.payload = {
               operation: 'info',
               stream: streamName,
@@ -509,8 +531,10 @@ module.exports = function (RED) {
           }
 
           case 'purge': {
-            const stream = await jsClient.streams.get(streamName);
-            await stream.purge();
+            // jsClient.streams.get(name) returns a Stream with no .purge() -
+            // only JetStreamManager.streams has it (verified against
+            // @nats-io/jetstream 3.4.0 types).
+            await jsm.streams.purge(streamName, msg.options);
             msg.payload = {
               operation: 'purge',
               stream: streamName,
@@ -593,7 +617,8 @@ module.exports = function (RED) {
 
             const createdConsumer = await jsm.consumers.add(
               streamName,
-              consumerConfig
+              consumerConfig,
+              msg.options
             );
             msg.payload = {
               operation: 'create',
@@ -615,7 +640,7 @@ module.exports = function (RED) {
               consumer: consumerName,
               config: consumerInfo.config,
               delivered: consumerInfo.delivered,
-              ack_pending: consumerInfo.ack_pending,
+              ack_pending: consumerInfo.num_ack_pending,
             };
             setGreenStatus(consumerName);
             break;
@@ -649,13 +674,17 @@ module.exports = function (RED) {
           }
 
           case 'pause': {
-            // Pause consumer (local operation - stops fetching new messages)
-            isPaused = true;
+            const result = await jsm.consumers.pause(
+              streamName,
+              consumerName,
+              new Date(msg.until || '9999-12-31T23:59:59.999Z')
+            );
+            isPaused = result.paused;
             msg.payload = {
               operation: 'pause',
               consumer: consumerName,
               success: true,
-              paused: true,
+              ...result,
             };
             node.status({
               fill: 'yellow',
@@ -667,13 +696,13 @@ module.exports = function (RED) {
           }
 
           case 'resume': {
-            // Resume consumer (local operation - starts fetching messages again)
-            isPaused = false;
+            const result = await jsm.consumers.resume(streamName, consumerName);
+            isPaused = result.paused;
             msg.payload = {
               operation: 'resume',
               consumer: consumerName,
               success: true,
-              paused: false,
+              ...result,
             };
             setGreenStatus(`${consumerName} (resumed)`);
             node.log(`[STREAM CONSUMER] Consumer resumed: ${consumerName}`);
@@ -689,25 +718,10 @@ module.exports = function (RED) {
 
             // Calculate additional stats
             const pending = consumerInfo.num_pending || 0;
-            const delivered = consumerInfo.delivered
-              ? consumerInfo.delivered.stream_seq
-              : 0;
+            const delivered = consumerInfo.delivered?.consumer_seq || 0;
             const ackPending = consumerInfo.num_ack_pending || 0;
             const redelivered = consumerInfo.num_redelivered || 0;
             const waiting = consumerInfo.num_waiting || 0;
-
-            // Calculate delivery rate (messages/sec) if timestamps available
-            let deliveryRate = 0;
-            if (consumerInfo.delivered && consumerInfo.delivered.last_active) {
-              const lastActive = new Date(
-                consumerInfo.delivered.last_active
-              ).getTime();
-              const now = Date.now();
-              const secondsSinceActive = (now - lastActive) / 1000;
-              if (secondsSinceActive > 0 && delivered > 0) {
-                deliveryRate = (delivered / secondsSinceActive).toFixed(2);
-              }
-            }
 
             msg.payload = {
               operation: 'monitor',
@@ -719,7 +733,6 @@ module.exports = function (RED) {
                 ack_pending: ackPending,
                 redelivered: redelivered,
                 waiting: waiting,
-                delivery_rate: parseFloat(deliveryRate),
                 paused: isPaused,
               },
               config: consumerInfo.config,
@@ -759,17 +772,24 @@ module.exports = function (RED) {
         const operation = msg.operation || config.operation || 'consume';
 
         // Stream management operations
-        if (
-          ['info', 'delete', 'purge'].includes(operation) &&
-          !msg.consumer &&
-          !config.consumerName
-        ) {
+        if (operation === 'purge') {
           await performStreamOperation(msg);
           return;
         }
 
         // Consumer management operations
-        if (['create', 'add', 'info', 'delete', 'list'].includes(operation)) {
+        if (
+          [
+            'create',
+            'add',
+            'info',
+            'delete',
+            'list',
+            'pause',
+            'resume',
+            'monitor',
+          ].includes(operation)
+        ) {
           await performConsumerOperation(msg);
           return;
         }
@@ -789,11 +809,8 @@ module.exports = function (RED) {
           }
         }
 
-        // Determine batch size (from msg or config)
-        const batchSize = msg.batchSize || config.batchSize || 1;
-
         // Consume messages
-        await consumeMessages(batchSize);
+        await consumeMessages(msg);
       } catch (err) {
         node.error(`Consumer error: ${err.message}`, msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });

@@ -1,4 +1,5 @@
-const { connect, credsAuthenticator, nkeyAuthenticator, Events, DebugEvents } = require('nats');
+const { connect } = require('@nats-io/transport-node');
+const { jwtAuthenticator, nkeyAuthenticator } = require('@nats-io/nats-core');
 const fs = require('fs');
 
 module.exports = function (RED) {
@@ -35,7 +36,9 @@ module.exports = function (RED) {
       }
     }
     if (this.authMethod === 'nkey' && this.nkeySeed.length == 0) {
-      this.error(`[NATS] Auth Method: ${this.authMethod} requires the nkeySeed to be set.`);
+      this.error(
+        `[NATS] Auth Method: ${this.authMethod} requires the nkeySeed to be set.`
+      );
     }
 
     // Debug connection info
@@ -56,7 +59,7 @@ module.exports = function (RED) {
       return Date.now() - this.connectionStats.connectionStartTime;
     };
 
-    this.formatUptime = (ms) => {
+    this.formatUptime = ms => {
       if (ms === 0 || ms < 1000) return '';
 
       const seconds = Math.floor(ms / 1000);
@@ -78,7 +81,7 @@ module.exports = function (RED) {
         uptime: this.getUptime(),
         uptimeFormatted: this.formatUptime(this.getUptime()),
         lastConnected: this.connectionStats.lastConnected,
-        lastDisconnected: this.connectionStats.lastDisconnected
+        lastDisconnected: this.connectionStats.lastDisconnected,
       };
 
       // OPC UA-style status display
@@ -99,10 +102,14 @@ module.exports = function (RED) {
 
       // Update node status like OPC UA
       this.status({
-        fill: this.connectionStatus === 'connected' ? 'green' :
-              this.connectionStatus === 'connecting' ? 'yellow' : 'red',
+        fill:
+          this.connectionStatus === 'connected'
+            ? 'green'
+            : this.connectionStatus === 'connecting'
+              ? 'yellow'
+              : 'red',
         shape: this.connectionStatus === 'connected' ? 'dot' : 'ring',
-        text: statusText
+        text: statusText,
       });
 
       this.listeners.forEach(listener => listener(statusInfo));
@@ -115,7 +122,7 @@ module.exports = function (RED) {
       lastDisconnected: null,
       totalUptime: 0,
       totalDowntime: 0,
-      connectionStartTime: null
+      connectionStartTime: null,
     };
 
     const servers = this.server.split(',');
@@ -124,12 +131,12 @@ module.exports = function (RED) {
     const ConnectionOptions = {
       servers: servers,
       reconnect: true, // Use the NATS client's native reconnect: backoff, jitter and server-pool
-                        // rotation are all handled internally - do not reimplement any of it here.
+      // rotation are all handled internally - do not reimplement any of it here.
       maxReconnectAttempts: -1, // Never give up once a connection has been established
       reconnectTimeWait: n.reconnectTimeWait || 1000,
       waitOnFirstConnect: false, // Fail fast on the *first* connect attempt so getConnection() can
-                                  // retry on demand instead of blocking; native reconnect above only
-                                  // governs recovery after that first connection succeeds.
+      // retry on demand instead of blocking; native reconnect above only
+      // governs recovery after that first connection succeeds.
       timeout: n.timeout || 10000, // 10 second timeout
       pingInterval: n.pingInterval || 30000, // 30 second ping interval
       maxPingOut: n.maxPingOut || 3, // Max ping outs before disconnect
@@ -142,7 +149,8 @@ module.exports = function (RED) {
           if (this.user) {
             ConnectionOptions.user = this.user;
             ConnectionOptions.pass = this.pass || '';
-            if (isDebug) this.log(`[NATS] Using username/password authentication`);
+            if (isDebug)
+              this.log(`[NATS] Using username/password authentication`);
           }
           break;
 
@@ -155,14 +163,19 @@ module.exports = function (RED) {
 
         case 'jwt':
           if (this.jwt && this.nkeySeed) {
-            // JWT requires both JWT and NKey seed
-            ConnectionOptions.authenticator = credsAuthenticator(
-              new TextEncoder().encode(this.jwt),
+            // JWT requires both JWT and NKey seed. jwtAuthenticator (not
+            // credsAuthenticator, which takes a single .creds blob) is what
+            // matches this two-field UI: it takes the JWT string and the
+            // NKey seed as separate arguments.
+            ConnectionOptions.authenticator = jwtAuthenticator(
+              this.jwt,
               new TextEncoder().encode(this.nkeySeed)
             );
             if (isDebug) this.log(`[NATS] Using JWT authentication`);
           } else if (this.jwt) {
-            this.warn('[NATS] JWT authentication requires both JWT token and NKey seed. Missing NKey seed.');
+            this.warn(
+              '[NATS] JWT authentication requires both JWT token and NKey seed. Missing NKey seed.'
+            );
           }
           break;
 
@@ -182,40 +195,49 @@ module.exports = function (RED) {
           break;
       }
     } catch (authErr) {
-      this.error(`[NATS] Authentication configuration error: ${authErr.message}`);
+      this.error(
+        `[NATS] Authentication configuration error: ${authErr.message}`
+      );
       if (isDebug) this.log(`[NATS] Auth error stack: ${authErr.stack}`);
     }
 
     // TLS Configuration
     if (this.enableTLS) {
       ConnectionOptions.tls = {
-        rejectUnauthorized: this.tlsRejectUnauthorized
+        rejectUnauthorized: this.tlsRejectUnauthorized,
       };
 
       try {
         // Load CA certificate if provided
         if (this.tlsCaFile && fs.existsSync(this.tlsCaFile)) {
           ConnectionOptions.tls.ca = fs.readFileSync(this.tlsCaFile);
-          if (isDebug) this.log(`[NATS] Loaded CA certificate from: ${this.tlsCaFile}`);
+          if (isDebug)
+            this.log(`[NATS] Loaded CA certificate from: ${this.tlsCaFile}`);
         }
 
         // Load client certificate if provided (for mTLS)
         if (this.tlsCertFile && fs.existsSync(this.tlsCertFile)) {
           ConnectionOptions.tls.cert = fs.readFileSync(this.tlsCertFile);
-          if (isDebug) this.log(`[NATS] Loaded client certificate from: ${this.tlsCertFile}`);
+          if (isDebug)
+            this.log(
+              `[NATS] Loaded client certificate from: ${this.tlsCertFile}`
+            );
         }
 
         // Load client key if provided (for mTLS)
         if (this.tlsKeyFile && fs.existsSync(this.tlsKeyFile)) {
           ConnectionOptions.tls.key = fs.readFileSync(this.tlsKeyFile);
-          if (isDebug) this.log(`[NATS] Loaded client key from: ${this.tlsKeyFile}`);
+          if (isDebug)
+            this.log(`[NATS] Loaded client key from: ${this.tlsKeyFile}`);
         }
 
         if (isDebug) {
           this.log(`[NATS] TLS enabled with:`);
           this.log(`  - Reject Unauthorized: ${this.tlsRejectUnauthorized}`);
           this.log(`  - CA Certificate: ${this.tlsCaFile ? 'loaded' : 'none'}`);
-          this.log(`  - Client Certificate: ${this.tlsCertFile ? 'loaded' : 'none'}`);
+          this.log(
+            `  - Client Certificate: ${this.tlsCertFile ? 'loaded' : 'none'}`
+          );
           this.log(`  - Client Key: ${this.tlsKeyFile ? 'loaded' : 'none'}`);
         }
       } catch (tlsErr) {
@@ -230,10 +252,19 @@ module.exports = function (RED) {
     // Watch the connection's lifecycle events. Started exactly once below, right after the
     // connection object is created, since native reconnect keeps that object's identity stable
     // across every disconnect/reconnect cycle for as long as the connection lives.
-    const watchConnectionStatus = async (nc) => {
+    const watchConnectionStatus = async nc => {
+      // 3.4.0 dropped the Events/DebugEvents enums entirely (verified: no
+      // runtime export on @nats-io/nats-core, only `s.type` string literals
+      // now - "disconnect", "reconnecting", "reconnect", "error", "ldm",
+      // "staleConnection", "ping", "update", plus "close"/"slowConsumer"/
+      // "forceReconnect" this node doesn't act on). Matching against the old
+      // enum members here silently killed this whole watcher on the first
+      // real event (case-label evaluation throws on `undefined.Disconnect`),
+      // which is why reconnect status never left "connected" - reproduced
+      // against a real docker-killed broker before this fix.
       for await (const s of nc.status()) {
         switch (s.type) {
-          case Events.Disconnect:
+          case 'disconnect':
             if (isDebug) this.log(`[NATS] Connection disconnected`);
             this.connectionStatus = 'disconnected';
             this.connectionStats.lastDisconnected = Date.now();
@@ -241,14 +272,14 @@ module.exports = function (RED) {
             this.emitStatusChange();
             break;
 
-          case DebugEvents.Reconnecting:
+          case 'reconnecting':
             if (isDebug) this.log(`[NATS] Reconnecting...`);
             this.connectionStatus = 'connecting';
             this.connectionStats.reconnectAttempts++;
             this.emitStatusChange();
             break;
 
-          case Events.Reconnect:
+          case 'reconnect':
             if (isDebug) this.log(`[NATS] Reconnected`);
             this.connectionStatus = 'connected';
             this.connectionStats.lastConnected = Date.now();
@@ -257,34 +288,43 @@ module.exports = function (RED) {
             this.emitStatusChange();
             break;
 
-          case Events.Error:
+          case 'error':
             // Async error reported by the server (e.g. a permissions violation) - surface it,
             // don't swallow it. Connection status is unaffected here; a disconnect/reconnecting
             // event will follow separately if the connection is actually impacted.
-            this.error(`[NATS] Connection error: ${s.data}`);
+            this.error(`[NATS] Connection error: ${s.error}`);
             break;
 
-          case Events.LDM:
-            this.warn('[NATS] Server is entering Lame Duck Mode; it will disconnect clients soon.');
+          case 'ldm':
+            this.warn(
+              '[NATS] Server is entering Lame Duck Mode; it will disconnect clients soon.'
+            );
             break;
 
-          case DebugEvents.StaleConnection:
+          case 'staleConnection':
             // Precedes an actual disconnect - treat it the same way so status reflects it early.
-            if (isDebug) this.log(`[NATS] Stale connection detected, heading for a disconnect`);
+            if (isDebug)
+              this.log(
+                `[NATS] Stale connection detected, heading for a disconnect`
+              );
             this.connectionStatus = 'disconnected';
             this.emitStatusChange();
             break;
 
-          case DebugEvents.PingTimer:
+          case 'ping':
             // Pure noise, fires constantly - ignore entirely.
             break;
 
-          case Events.Update:
-            if (isDebug) this.log(`[NATS] Cluster topology update: ${JSON.stringify(s.data)}`);
+          case 'update':
+            if (isDebug)
+              this.log(
+                `[NATS] Cluster topology update: added=${JSON.stringify(s.added)} deleted=${JSON.stringify(s.deleted)}`
+              );
             break;
 
           default:
-            if (isDebug) this.log(`[NATS] Unhandled connection status event: ${s.type}`);
+            if (isDebug)
+              this.log(`[NATS] Unhandled connection status event: ${s.type}`);
         }
       }
     };
@@ -316,32 +356,49 @@ module.exports = function (RED) {
           // Start connection timeout warning
           const connectionStartTime = Date.now();
           const connectionTimeout = setTimeout(() => {
-            const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
-            if (isDebug) this.log(`[NATS] WARNING: Connection attempt taking longer than expected (${elapsed}s)`);
-            this.warn(`NATS connection attempt taking longer than expected (${elapsed}s). Check server availability.`);
+            const elapsed = Math.floor(
+              (Date.now() - connectionStartTime) / 1000
+            );
+            if (isDebug)
+              this.log(
+                `[NATS] WARNING: Connection attempt taking longer than expected (${elapsed}s)`
+              );
+            this.warn(
+              `NATS connection attempt taking longer than expected (${elapsed}s). Check server availability.`
+            );
           }, 10000);
 
           // Log connection attempt with auth method and TLS info
           let authInfo = 'no authentication';
           switch (this.authMethod) {
             case 'userpass':
-              authInfo = this.user ? `username/password (user: ***)` : 'no authentication';
+              authInfo = this.user
+                ? `username/password (user: ***)`
+                : 'no authentication';
               break;
             case 'token':
-              authInfo = this.token ? 'token authentication (***)' : 'no authentication';
+              authInfo = this.token
+                ? 'token authentication (***)'
+                : 'no authentication';
               break;
             case 'jwt':
-              authInfo = this.jwt ? 'JWT authentication (***+***)' : 'no authentication';
+              authInfo = this.jwt
+                ? 'JWT authentication (***+***)'
+                : 'no authentication';
               break;
             case 'nkey':
-              authInfo = this.nkeySeed ? 'NKey authentication (***)' : 'no authentication';
+              authInfo = this.nkeySeed
+                ? 'NKey authentication (***)'
+                : 'no authentication';
               break;
           }
 
           const tlsInfo = this.enableTLS ? 'with TLS/SSL' : 'without TLS';
 
           if (isDebug) {
-            this.log(`[NATS] Connection attempt ${this.connectionStats.reconnectAttempts}:`);
+            this.log(
+              `[NATS] Connection attempt ${this.connectionStats.reconnectAttempts}:`
+            );
             this.log(`  - Servers: ${servers.join(', ')}`);
             this.log(`  - Auth: ${authInfo}`);
             this.log(`  - Security: ${tlsInfo}`);
@@ -379,7 +436,8 @@ module.exports = function (RED) {
             try {
               await watchConnectionStatus(this.connection);
             } catch (err) {
-              if (isDebug) this.log(`[NATS] Status iterator ended: ${err.message}`);
+              if (isDebug)
+                this.log(`[NATS] Status iterator ended: ${err.message}`);
             }
           })();
 
@@ -391,12 +449,14 @@ module.exports = function (RED) {
 
           return this.connection;
         } catch (err) {
-          if (isDebug) this.log(`[NATS] Connection failed with error: ${err.message}`);
-          if (isDebug) this.log(`[NATS] Error details:`, {
-            name: err.name,
-            code: err.code,
-            stack: err.stack?.split('\n')[0]
-          });
+          if (isDebug)
+            this.log(`[NATS] Connection failed with error: ${err.message}`);
+          if (isDebug)
+            this.log(`[NATS] Error details:`, {
+              name: err.name,
+              code: err.code,
+              stack: err.stack?.split('\n')[0],
+            });
 
           this.connectionStatus = 'disconnected';
           this.connectionStats.lastDisconnected = Date.now();
@@ -450,9 +510,12 @@ module.exports = function (RED) {
     })();
 
     // Connection Pool: Register a node as user of this connection
-    this.registerConnectionUser = (nodeId) => {
+    this.registerConnectionUser = nodeId => {
       if (!nodeId) {
-        if (isDebug) this.log(`[NATS] Warning: registerConnectionUser called without nodeId`);
+        if (isDebug)
+          this.log(
+            `[NATS] Warning: registerConnectionUser called without nodeId`
+          );
         return;
       }
 
@@ -461,7 +524,9 @@ module.exports = function (RED) {
       this.connectionRefCount = this.connectionUsers.size;
 
       if (wasNew && isDebug) {
-        this.log(`[NATS] Node ${nodeId} registered as connection user (total: ${this.connectionRefCount})`);
+        this.log(
+          `[NATS] Node ${nodeId} registered as connection user (total: ${this.connectionRefCount})`
+        );
       }
     };
 
@@ -475,12 +540,17 @@ module.exports = function (RED) {
         !this.connection ||
         deferredCloseTimer ||
         deferredClosePromise
-      ) return;
+      )
+        return;
 
-      if (isDebug) this.log(`[NATS] No more connection users - scheduling connection cleanup in 30s`);
+      if (isDebug)
+        this.log(
+          `[NATS] No more connection users - scheduling connection cleanup in 30s`
+        );
       deferredCloseTimer = setTimeout(() => {
         deferredCloseTimer = null;
-        if (this.connectionRefCount !== 0 || !this.connection || closing) return;
+        if (this.connectionRefCount !== 0 || !this.connection || closing)
+          return;
 
         if (isDebug) this.log(`[NATS] Closing unused connection`);
 
@@ -498,7 +568,9 @@ module.exports = function (RED) {
               this.emitStatusChange();
             }
           } catch (err) {
-            this.error(`[NATS] Failed to close unused connection: ${err.message}`);
+            this.error(
+              `[NATS] Failed to close unused connection: ${err.message}`
+            );
           } finally {
             if (deferredClosePromise === closePromise) {
               deferredClosePromise = null;
@@ -509,9 +581,12 @@ module.exports = function (RED) {
         deferredClosePromise = closePromise;
       }, 30000);
     };
-    this.unregisterConnectionUser = (nodeId) => {
+    this.unregisterConnectionUser = nodeId => {
       if (!nodeId) {
-        if (isDebug) this.log(`[NATS] Warning: unregisterConnectionUser called without nodeId`);
+        if (isDebug)
+          this.log(
+            `[NATS] Warning: unregisterConnectionUser called without nodeId`
+          );
         return;
       }
 
@@ -520,7 +595,9 @@ module.exports = function (RED) {
       this.connectionRefCount = this.connectionUsers.size;
 
       if (hadUser && isDebug) {
-        this.log(`[NATS] Node ${nodeId} unregistered as connection user (remaining: ${this.connectionRefCount})`);
+        this.log(
+          `[NATS] Node ${nodeId} unregistered as connection user (remaining: ${this.connectionRefCount})`
+        );
       }
 
       // Automatic cleanup: Close connection if no users left
@@ -534,7 +611,7 @@ module.exports = function (RED) {
         status: this.connectionStatus,
         reconnectAttempts: this.connectionStats.reconnectAttempts,
         uptime: this.getUptime(),
-        uptimeFormatted: this.formatUptime(this.getUptime())
+        uptimeFormatted: this.formatUptime(this.getUptime()),
       });
     };
 
@@ -546,7 +623,7 @@ module.exports = function (RED) {
       return {
         ...this.connectionStats,
         uptime: this.getUptime(),
-        uptimeFormatted: this.formatUptime(this.getUptime())
+        uptimeFormatted: this.formatUptime(this.getUptime()),
       };
     };
 
@@ -563,7 +640,7 @@ module.exports = function (RED) {
       if (!connection.isClosed()) await bounded(connection.close());
     };
 
-    this.on('close', async (done) => {
+    this.on('close', async done => {
       if (isDebug) this.log(`[NATS] Node closing, cleaning up connections...`);
 
       closing = true;
@@ -602,11 +679,11 @@ module.exports = function (RED) {
   }
   RED.nodes.registerType('nats-suite-server', NatsServerNode, {
     credentials: {
-      user: { type: "text" },
-      pass: { type: "password" },
-      token: { type: "password" },
-      jwt: { type: "password" },
-      nkeySeed: { type: "password" }
-    }
+      user: { type: 'text' },
+      pass: { type: 'password' },
+      token: { type: 'password' },
+      jwt: { type: 'password' },
+      nkeySeed: { type: 'password' },
+    },
   });
 };

@@ -388,6 +388,16 @@
 <script type="text/x-red" data-help-name="nats-suite-stream-consumer">
     <p>Consumes messages from NATS JetStream with acknowledgment control.</p>
 
+    <h3>Inputs</h3>
+    <dl class="message-properties">
+      <dt class="optional">config <span class="property-type">object</span></dt>
+      <dd>Native <code>ConsumerConfig</code> for create/add operations</dd>
+      <dt class="optional">options <span class="property-type">object</span></dt>
+      <dd>Native create, stream info/purge, or fetch options for the selected operation</dd>
+      <dt class="optional">until <span class="property-type">string</span></dt>
+      <dd>ISO date/time for the server-side pause operation; omit to pause indefinitely</dd>
+    </dl>
+
     <h3>Outputs</h3>
     <dl class="message-properties">
       <dt>payload <span class="property-type">any</span></dt>

@@ -1,6 +1,7 @@
 'use strict';
 
-const { StringCodec } = require('nats');
+const { Svcm } = require('@nats-io/services');
+const { jetstreamManager } = require('@nats-io/jetstream');
 
 module.exports = function (RED) {
   function NatsServiceNode(config) {
@@ -23,7 +24,6 @@ module.exports = function (RED) {
 
     let nc = null;
     let service = null;
-    const sc = StringCodec();
     const isDebug = !!config.debug;
 
     // Service state
@@ -32,7 +32,7 @@ module.exports = function (RED) {
       requests: 0,
       errors: 0,
       avgProcessingTime: 0,
-      lastRequest: null
+      lastRequest: null,
     };
 
     // Health check state
@@ -48,7 +48,7 @@ module.exports = function (RED) {
     // restores them, and the underlying service object only self-closes when
     // the connection is closed for good, not on a transient disconnect - so
     // there is nothing to tear down or restart here).
-    const statusListener = (statusInfo) => {
+    const statusListener = statusInfo => {
       const status = statusInfo.status || statusInfo;
 
       switch (status) {
@@ -88,7 +88,7 @@ module.exports = function (RED) {
 
       try {
         nc = await node.serverConfig.getConnection();
-        
+
         const serviceName = config.serviceName || 'default-service';
         const version = config.serviceVersion || '1.0.0';
         const description = config.serviceDescription || '';
@@ -98,7 +98,7 @@ module.exports = function (RED) {
           name: serviceName,
           version: version,
           description: description,
-          queue: config.queueGroup || serviceName
+          queue: config.queueGroup || serviceName,
         };
 
         // Add metadata if configured
@@ -111,7 +111,7 @@ module.exports = function (RED) {
         }
 
         // Create service
-        service = await nc.services.add(serviceConfig);
+        service = await new Svcm(nc).add(serviceConfig);
         isServiceRunning = true;
 
         // Add endpoint
@@ -120,7 +120,7 @@ module.exports = function (RED) {
 
         const endpointHandler = async (err, msg) => {
           const startTime = Date.now();
-          
+
           try {
             serviceStats.requests++;
             serviceStats.lastRequest = Date.now();
@@ -132,16 +132,18 @@ module.exports = function (RED) {
             }
 
             // Decode request
-            const requestData = sc.decode(msg.data);
+            const requestData = msg.string();
             let payload;
             try {
               payload = JSON.parse(requestData);
-            } catch (e) {
+            } catch {
               payload = requestData;
             }
 
             if (isDebug) {
-              node.log(`[SERVICE] Request received on ${subject}: ${JSON.stringify(payload)}`);
+              node.log(
+                `[SERVICE] Request received on ${subject}: ${JSON.stringify(payload)}`
+              );
             }
 
             // Build output message
@@ -150,16 +152,22 @@ module.exports = function (RED) {
               subject: msg.subject,
               service: serviceName,
               endpoint: endpoint,
-              respond: (response) => {
+              respond: response => {
                 try {
-                  const responseData = typeof response === 'string' ? response : JSON.stringify(response);
-                  msg.respond(sc.encode(responseData));
-                  
+                  const responseData =
+                    typeof response === 'string'
+                      ? response
+                      : JSON.stringify(response);
+                  msg.respond(responseData);
+
                   // Update stats
                   const processingTime = Date.now() - startTime;
-                  serviceStats.avgProcessingTime = 
-                    (serviceStats.avgProcessingTime * (serviceStats.requests - 1) + processingTime) / serviceStats.requests;
-                  
+                  serviceStats.avgProcessingTime =
+                    (serviceStats.avgProcessingTime *
+                      (serviceStats.requests - 1) +
+                      processingTime) /
+                    serviceStats.requests;
+
                   if (isDebug) {
                     node.log(`[SERVICE] Response sent in ${processingTime}ms`);
                   }
@@ -173,47 +181,56 @@ module.exports = function (RED) {
                   serviceStats.errors++;
                   const errorResponse = {
                     error: error,
-                    code: code || 'SERVICE_ERROR'
+                    code: code || 'SERVICE_ERROR',
                   };
-                  msg.respond(sc.encode(JSON.stringify(errorResponse)));
+                  msg.respond(JSON.stringify(errorResponse));
                 } catch (err) {
-                  node.error(`[SERVICE] Failed to send error response: ${err.message}`);
+                  node.error(
+                    `[SERVICE] Failed to send error response: ${err.message}`
+                  );
                 }
-              }
+              },
             };
 
             // Send to output for processing
             node.send(outMsg);
-            
-            // Update status
-            node.status({ 
-              fill: 'green', 
-              shape: 'dot', 
-              text: `${serviceName} (${serviceStats.requests} reqs)` 
-            });
 
+            // Update status
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `${serviceName} (${serviceStats.requests} reqs)`,
+            });
           } catch (err) {
             serviceStats.errors++;
             node.error(`[SERVICE] Handler error: ${err.message}`);
-            
+
             try {
-              msg.respond(sc.encode(JSON.stringify({
-                error: 'Internal service error',
-                code: 'INTERNAL_ERROR'
-              })));
+              msg.respond(
+                JSON.stringify({
+                  error: 'Internal service error',
+                  code: 'INTERNAL_ERROR',
+                })
+              );
             } catch (respondErr) {
-              node.error(`[SERVICE] Failed to send error response: ${respondErr.message}`);
+              node.error(
+                `[SERVICE] Failed to send error response: ${respondErr.message}`
+              );
             }
           }
         };
 
-        // Add endpoint to service
-        await service.addEndpoint(endpoint, endpointHandler);
+        // Add endpoint to service. addEndpoint() is synchronous - it returns
+        // a QueuedIterator<ServiceMsg>, not a Promise.
+        service.addEndpoint(endpoint, endpointHandler);
 
         node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
         node.log(`[SERVICE] Endpoint: ${subject}`);
-        node.status({ fill: 'green', shape: 'dot', text: `${serviceName} (running)` });
-
+        node.status({
+          fill: 'green',
+          shape: 'dot',
+          text: `${serviceName} (running)`,
+        });
       } catch (err) {
         node.error(`[SERVICE] Failed to start service: ${err.message}`);
         node.status({ fill: 'red', shape: 'ring', text: 'start failed' });
@@ -233,7 +250,6 @@ module.exports = function (RED) {
 
         node.log('[SERVICE] Service stopped');
         node.status({ fill: 'grey', shape: 'ring', text: 'stopped' });
-
       } catch (err) {
         node.error(`[SERVICE] Failed to stop service: ${err.message}`);
       }
@@ -243,16 +259,16 @@ module.exports = function (RED) {
     const discoverServices = async () => {
       try {
         nc = await node.serverConfig.getConnection();
-        
+
         const serviceName = config.serviceName || '*';
         const services = [];
 
         // Get service client
-        const client = nc.services.client();
-        
+        const client = new Svcm(nc).client();
+
         // Use info() for discovery - it returns service information
         const filter = serviceName === '*' ? undefined : serviceName;
-        
+
         // Collect service info using async iterator
         for await (const info of await client.info(filter)) {
           services.push({
@@ -262,12 +278,11 @@ module.exports = function (RED) {
             type: info.type || 'service',
             description: info.description || '',
             metadata: info.metadata || {},
-            endpoints: info.endpoints || []
+            endpoints: info.endpoints || [],
           });
         }
 
         return services;
-
       } catch (err) {
         node.error(`[SERVICE] Discovery failed: ${err.message}`);
         throw err;
@@ -278,16 +293,16 @@ module.exports = function (RED) {
     const getServiceStats = async () => {
       try {
         nc = await node.serverConfig.getConnection();
-        
+
         const serviceName = config.serviceName || '*';
         const stats = [];
 
         // Get service client
-        const client = nc.services.client();
-        
+        const client = new Svcm(nc).client();
+
         // Get stats for services using async iterator
         const filter = serviceName === '*' ? undefined : serviceName;
-        
+
         for await (const info of await client.stats(filter)) {
           stats.push({
             name: info.name,
@@ -295,12 +310,11 @@ module.exports = function (RED) {
             version: info.version,
             endpoints: info.endpoints || [],
             started: info.started,
-            type: info.type || 'service'
+            type: info.type || 'service',
           });
         }
 
         return stats;
-
       } catch (err) {
         node.error(`[SERVICE] Stats failed: ${err.message}`);
         throw err;
@@ -310,7 +324,7 @@ module.exports = function (RED) {
     // ==================== NATS STATS FUNCTIONS ====================
 
     // Get NATS server/connection statistics
-    const getNatsStats = async (statsType) => {
+    const getNatsStats = async statsType => {
       try {
         nc = await node.serverConfig.getConnection();
         const type = statsType || config.statsType || 'server';
@@ -324,19 +338,22 @@ module.exports = function (RED) {
               outMsgs: stats.outMsgs,
               inBytes: stats.inBytes,
               outBytes: stats.outBytes,
-              reconnects: stats.reconnects
+              // Stats has no reconnect count; the config node already
+              // tracks it from the connection's status() events.
+              reconnects:
+                node.serverConfig.getConnectionStats().reconnectAttempts,
             };
           }
 
           case 'jetstream': {
-            const jsm = await nc.jetstreamManager();
-            const accountInfo = await jsm.account.info();
+            const jsm = await jetstreamManager(nc);
+            const accountInfo = await jsm.getAccountInfo();
             return {
               type: 'jetstream',
               memory: accountInfo.memory,
-              store: accountInfo.store,
+              store: accountInfo.storage,
               api: accountInfo.api,
-              limits: accountInfo.limits
+              limits: accountInfo.limits,
             };
           }
 
@@ -346,16 +363,16 @@ module.exports = function (RED) {
               type: 'connections',
               server_id: serverInfo.server_id,
               version: serverInfo.version,
-              connections: serverInfo.connections || 0
+              connections: serverInfo.connections || 0,
             };
           }
 
           case 'all': {
             const stats = nc.stats();
-            const jsm = await nc.jetstreamManager();
-            const accountInfo = await jsm.account.info();
+            const jsm = await jetstreamManager(nc);
+            const accountInfo = await jsm.getAccountInfo();
             const serverInfo = nc.info;
-            
+
             return {
               type: 'all',
               server: {
@@ -363,19 +380,20 @@ module.exports = function (RED) {
                 outMsgs: stats.outMsgs,
                 inBytes: stats.inBytes,
                 outBytes: stats.outBytes,
-                reconnects: stats.reconnects
+                reconnects:
+                  node.serverConfig.getConnectionStats().reconnectAttempts,
               },
               jetstream: {
                 memory: accountInfo.memory,
-                store: accountInfo.store,
+                store: accountInfo.storage,
                 api: accountInfo.api,
-                limits: accountInfo.limits
+                limits: accountInfo.limits,
               },
               connections: {
                 server_id: serverInfo.server_id,
                 version: serverInfo.version,
-                connections: serverInfo.connections || 0
-              }
+                connections: serverInfo.connections || 0,
+              },
             };
           }
 
@@ -398,7 +416,7 @@ module.exports = function (RED) {
 
     const checkThresholds = (stats, connectionInfo, config) => {
       const alerts = [];
-      
+
       // Latency threshold
       if (connectionInfo.latency > (config.latencyThreshold || 100)) {
         alerts.push({
@@ -406,10 +424,10 @@ module.exports = function (RED) {
           type: 'latency',
           message: `High latency: ${connectionInfo.latency}ms`,
           value: connectionInfo.latency,
-          threshold: config.latencyThreshold || 100
+          threshold: config.latencyThreshold || 100,
         });
       }
-      
+
       // Reconnect threshold
       if (stats.reconnects > (config.reconnectThreshold || 5)) {
         alerts.push({
@@ -417,21 +435,24 @@ module.exports = function (RED) {
           type: 'reconnects',
           message: `High reconnect count: ${stats.reconnects}`,
           value: stats.reconnects,
-          threshold: config.reconnectThreshold || 5
+          threshold: config.reconnectThreshold || 5,
         });
       }
-      
+
       // Throughput threshold
-      if (stats.throughput.messagesPerSecond > (config.throughputThreshold || 1000)) {
+      if (
+        stats.throughput.messagesPerSecond >
+        (config.throughputThreshold || 1000)
+      ) {
         alerts.push({
           level: 'info',
           type: 'throughput',
           message: `High throughput: ${stats.throughput.messagesPerSecond} msg/s`,
           value: stats.throughput.messagesPerSecond,
-          threshold: config.throughputThreshold || 1000
+          threshold: config.throughputThreshold || 1000,
         });
       }
-      
+
       return alerts;
     };
 
@@ -439,97 +460,109 @@ module.exports = function (RED) {
       const summary = {
         overall: alerts.length === 0 ? 'healthy' : 'warning',
         connection: connectionInfo.connected ? 'stable' : 'unstable',
-        performance: connectionInfo.latency < 50 ? 'excellent' : 
-                    connectionInfo.latency < 100 ? 'good' : 'poor',
-        activity: stats.inMsgs + stats.outMsgs > 1000 ? 'high' : 
-                 stats.inMsgs + stats.outMsgs > 100 ? 'moderate' : 'low'
+        performance:
+          connectionInfo.latency < 50
+            ? 'excellent'
+            : connectionInfo.latency < 100
+              ? 'good'
+              : 'poor',
+        activity:
+          stats.inMsgs + stats.outMsgs > 1000
+            ? 'high'
+            : stats.inMsgs + stats.outMsgs > 100
+              ? 'moderate'
+              : 'low',
       };
-      
+
       return summary;
     };
 
-    const performConnectivityTests = async (natsnc, config) => {
+    const performConnectivityTests = async natsnc => {
       const results = [];
       let passed = 0;
       let failed = 0;
-      
+
       try {
         // Test 1: Basic publish/subscribe
-        const testSubject = 'health.test.pubsub';
+        const testSubject = `health.test.pubsub.${node.id}`;
         const testMessage = { test: 'connectivity', timestamp: Date.now() };
-        
-        const subscription = natsnc.subscribe(testSubject);
-        const receivedMessages = [];
-        
-        const messageCollector = (async () => {
-          try {
-            for await (const msg of subscription) {
-              receivedMessages.push(msg);
-              break;
-            }
-          } catch (err) {
-            // Subscription cancelled - normal for tests
-          }
-        })();
-        
-        natsnc.publish(testSubject, sc.encode(JSON.stringify(testMessage)));
-        
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        if (receivedMessages.length > 0) {
-          results.push({ test: 'publish_subscribe', status: 'passed', latency: '100ms' });
-          passed++;
-        } else {
-          results.push({ test: 'publish_subscribe', status: 'failed', error: 'No message received' });
-          failed++;
-        }
-        
-        subscription.unsubscribe();
-        
-        // Test 2: Request/Response
-        const requestSubject = 'health.test.request';
-        const requestMessage = { test: 'request_response', timestamp: Date.now() };
-        
-        const responseSub = natsnc.subscribe(requestSubject);
-        const responseHandler = (async () => {
-          try {
-            for await (const msg of responseSub) {
-              if (msg.reply) {
-                const response = { response: 'ok', timestamp: Date.now() };
-                natsnc.publish(msg.reply, sc.encode(JSON.stringify(response)));
-              }
-            }
-          } catch (err) {
-            // Subscription cancelled - normal for tests
-          }
-        })();
-        
-        const requestStart = Date.now();
-        const response = await natsnc.request(requestSubject, sc.encode(JSON.stringify(requestMessage)), {
-          timeout: 1000
+        const publishStart = Date.now();
+        const subscription = natsnc.subscribe(testSubject, {
+          max: 1,
+          timeout: 1000,
         });
+
+        natsnc.publish(testSubject, JSON.stringify(testMessage));
+        await subscription[Symbol.asyncIterator]().next();
+        results.push({
+          test: 'publish_subscribe',
+          status: 'passed',
+          latency: `${Date.now() - publishStart}ms`,
+        });
+        passed++;
+
+        // Test 2: Request/Response
+        const requestSubject = `health.test.request.${node.id}`;
+        const requestMessage = {
+          test: 'request_response',
+          timestamp: Date.now(),
+        };
+        const responseSub = natsnc.subscribe(requestSubject, { max: 1 });
+        const respond = async () => {
+          for await (const msg of responseSub) {
+            if (msg.reply) {
+              msg.respond(
+                JSON.stringify({ response: 'ok', timestamp: Date.now() })
+              );
+            }
+            break;
+          }
+        };
+        const responding = respond();
+        await natsnc.flush();
+
+        const requestStart = Date.now();
+        const response = await natsnc.request(
+          requestSubject,
+          JSON.stringify(requestMessage),
+          {
+            timeout: 1000,
+          }
+        );
+        await responding;
         const requestLatency = Date.now() - requestStart;
-        
+
         if (response) {
-          results.push({ test: 'request_response', status: 'passed', latency: `${requestLatency}ms` });
+          results.push({
+            test: 'request_response',
+            status: 'passed',
+            latency: `${requestLatency}ms`,
+          });
           passed++;
         } else {
-          results.push({ test: 'request_response', status: 'failed', error: 'No response received' });
+          results.push({
+            test: 'request_response',
+            status: 'failed',
+            error: 'No response received',
+          });
           failed++;
         }
-        
+
         responseSub.unsubscribe();
-        
       } catch (error) {
-        results.push({ test: 'connectivity', status: 'failed', error: error.message });
+        results.push({
+          test: 'connectivity',
+          status: 'failed',
+          error: error.message,
+        });
         failed++;
       }
-      
+
       return {
         total: passed + failed,
         passed,
         failed,
-        results
+        results,
       };
     };
 
@@ -537,41 +570,43 @@ module.exports = function (RED) {
     const performHealthCheck = async () => {
       try {
         node.status({ fill: 'yellow', shape: 'ring', text: 'checking' });
-        
+
         // Check connection status BEFORE attempting health check
         if (this.serverConfig.connectionStatus !== 'connected') {
           const errorStatus = {
             status: 'disconnected',
             timestamp: Date.now(),
             error: {
-              message: 'Cannot perform health check - NATS server is not connected',
+              message:
+                'Cannot perform health check - NATS server is not connected',
               code: 'NOT_CONNECTED',
               connectionStatus: this.serverConfig.connectionStatus,
-              reconnectAttempts: this.serverConfig.connectionStats.reconnectAttempts
-            }
+              reconnectAttempts:
+                this.serverConfig.connectionStats.reconnectAttempts,
+            },
           };
-          
+
           const msg = {
             payload: errorStatus,
             topic: 'nats.health',
-            status: 'disconnected'
+            status: 'disconnected',
           };
-          
+
           node.send(msg);
           node.status({ fill: 'red', shape: 'ring', text: 'disconnected' });
           return;
         }
-        
+
         const natsnc = await this.serverConfig.getConnection();
-        
+
         // Get server info
         const serverInfo = natsnc.info;
-        
+
         // Measure latency using ping/pong
         const latencyStart = Date.now();
         await natsnc.flush();
         const latency = Date.now() - latencyStart;
-        
+
         // Get extended server info
         const extendedServerInfo = {
           name: serverInfo.name,
@@ -592,53 +627,63 @@ module.exports = function (RED) {
           jetStream: serverInfo.jetstream || false,
           tlsRequired: serverInfo.tls_required || false,
           tlsVerify: serverInfo.tls_verify || false,
-          tlsAvailable: serverInfo.tls_available || false
+          tlsAvailable: serverInfo.tls_available || false,
         };
-        
+
+        // connected/draining/closed aren't properties on NatsConnection;
+        // reconnects isn't on Stats either - the config node already
+        // tracks it from the connection's status() events.
+        const reconnects =
+          node.serverConfig.getConnectionStats().reconnectAttempts;
+        const ncStats = natsnc.stats();
+
         // Enhanced connection info
         const connectionInfo = {
-          connected: natsnc.connected,
-          draining: natsnc.draining,
-          closed: natsnc.closed,
+          connected: !natsnc.isClosed(),
+          draining: natsnc.isDraining(),
+          closed: natsnc.isClosed(),
           latency: latency,
-          uptime: natsnc.stats.reconnects === 0 ? 'stable' : `${natsnc.stats.reconnects} reconnects`,
-          lastError: natsnc.stats.reconnects > 0 ? 'Connection was unstable' : null
+          uptime: reconnects === 0 ? 'stable' : `${reconnects} reconnects`,
+          lastError: reconnects > 0 ? 'Connection was unstable' : null,
         };
-        
+
         // Enhanced statistics
         const stats = {
-          inMsgs: natsnc.stats.inMsgs,
-          outMsgs: natsnc.stats.outMsgs,
-          inBytes: natsnc.stats.inBytes,
-          outBytes: natsnc.stats.outBytes,
-          reconnects: natsnc.stats.reconnects,
-          pending: natsnc.stats.pending,
-          pings: natsnc.stats.pings,
-          pongs: natsnc.stats.pongs,
+          inMsgs: ncStats.inMsgs,
+          outMsgs: ncStats.outMsgs,
+          inBytes: ncStats.inBytes,
+          outBytes: ncStats.outBytes,
+          reconnects: reconnects,
           throughput: {
-            messagesPerSecond: calculateThroughput(natsnc.stats.inMsgs, natsnc.stats.outMsgs),
-            bytesPerSecond: calculateThroughput(natsnc.stats.inBytes, natsnc.stats.outBytes)
-          }
+            messagesPerSecond: calculateThroughput(
+              ncStats.inMsgs,
+              ncStats.outMsgs
+            ),
+            bytesPerSecond: calculateThroughput(
+              ncStats.inBytes,
+              ncStats.outBytes
+            ),
+          },
         };
-        
+
         // Check thresholds and generate alerts
         const alerts = checkThresholds(stats, connectionInfo, config);
-        
+
         // Perform connectivity tests if enabled
         let connectivityTests = {};
         if (config.enableConnectivityTests) {
-          connectivityTests = await performConnectivityTests(natsnc, config);
+          connectivityTests = await performConnectivityTests(natsnc);
           if (connectivityTests.failed > 0) {
             alerts.push({
               level: 'error',
               type: 'connectivity',
               message: `${connectivityTests.failed} connectivity tests failed`,
               value: connectivityTests.failed,
-              details: connectivityTests.results
+              details: connectivityTests.results,
             });
           }
         }
-        
+
         // Create enhanced health status message
         const healthStatus = {
           status: alerts.length > 0 ? 'warning' : 'healthy',
@@ -648,19 +693,22 @@ module.exports = function (RED) {
           stats: stats,
           alerts: alerts,
           connectivityTests: connectivityTests,
-          summary: generateSummary(stats, connectionInfo, alerts)
+          summary: generateSummary(stats, connectionInfo, alerts),
         };
 
         // Send health status
         const msg = {
           payload: healthStatus,
           topic: 'nats.health',
-          status: 'success'
+          status: 'success',
         };
 
         node.send(msg);
-        node.status({ fill: 'green', shape: 'dot', text: `healthy (${latency}ms)` });
-
+        node.status({
+          fill: 'green',
+          shape: 'dot',
+          text: `healthy (${latency}ms)`,
+        });
       } catch (err) {
         const errorStatus = {
           status: 'unhealthy',
@@ -668,14 +716,14 @@ module.exports = function (RED) {
           error: {
             message: err.message,
             code: err.code,
-            name: err.name
-          }
+            name: err.name,
+          },
         };
 
         const msg = {
           payload: errorStatus,
           topic: 'nats.health',
-          status: 'error'
+          status: 'error',
         };
 
         node.send(msg);
@@ -714,80 +762,114 @@ module.exports = function (RED) {
         // Service requests are handled automatically by the endpoint handler
         if (config.mode === 'service') {
           const operation = msg.operation;
-          
+
           if (operation === 'start') {
             await startService();
-            msg.payload = { operation: 'start', success: true, running: isServiceRunning };
+            msg.payload = {
+              operation: 'start',
+              success: true,
+              running: isServiceRunning,
+            };
             node.send(msg);
             return;
           }
-          
+
           if (operation === 'stop') {
             await stopService();
-            msg.payload = { operation: 'stop', success: true, running: isServiceRunning };
+            msg.payload = {
+              operation: 'stop',
+              success: true,
+              running: isServiceRunning,
+            };
             node.send(msg);
             return;
           }
-          
+
           // For service mode, ignore other operations (service runs automatically)
           // Requests come through the endpoint handler, not the input handler
           return;
         }
-        
+
         // For other modes, handle operations normally
-        const operation = msg.operation || config.operation || config.mode || 'discover';
+        const operation =
+          msg.operation || config.operation || config.mode || 'discover';
 
         switch (operation) {
           case 'start':
             await startService();
-            msg.payload = { operation: 'start', success: true, running: isServiceRunning };
+            msg.payload = {
+              operation: 'start',
+              success: true,
+              running: isServiceRunning,
+            };
             node.send(msg);
             break;
 
           case 'stop':
             await stopService();
-            msg.payload = { operation: 'stop', success: true, running: isServiceRunning };
+            msg.payload = {
+              operation: 'stop',
+              success: true,
+              running: isServiceRunning,
+            };
             node.send(msg);
             break;
 
-          case 'discover':
+          case 'discover': {
             const services = await discoverServices();
             msg.payload = services;
             msg.operation = 'discover';
             msg.count = services.length;
-            node.status({ fill: 'blue', shape: 'dot', text: `${services.length} services` });
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `${services.length} services`,
+            });
             node.send(msg);
             break;
+          }
 
-          case 'stats':
+          case 'stats': {
             const statsResult = await getServiceStats();
             msg.payload = statsResult;
             msg.operation = 'stats';
             msg.count = statsResult.length;
-            node.status({ fill: 'blue', shape: 'dot', text: `${statsResult.length} services` });
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `${statsResult.length} services`,
+            });
             node.send(msg);
             break;
+          }
 
           case 'ping': {
             const pingServiceName = msg.serviceName || config.serviceName;
             nc = await node.serverConfig.getConnection();
-            const client = nc.services.client();
+            const client = new Svcm(nc).client();
             const pingResults = [];
-            const filter = pingServiceName === '*' || !pingServiceName ? undefined : pingServiceName;
-            
+            const filter =
+              pingServiceName === '*' || !pingServiceName
+                ? undefined
+                : pingServiceName;
+
             for await (const info of await client.ping(filter)) {
               pingResults.push({
                 name: info.name,
                 id: info.id,
                 version: info.version,
-                type: info.type || 'service'
+                type: info.type || 'service',
               });
             }
-            
+
             msg.payload = pingResults;
             msg.operation = 'ping';
             msg.count = pingResults.length;
-            node.status({ fill: 'blue', shape: 'dot', text: `${pingResults.length} services` });
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `${pingResults.length} services`,
+            });
             node.send(msg);
             break;
           }
@@ -802,7 +884,11 @@ module.exports = function (RED) {
             msg.payload = natsStatsResult;
             msg.operation = 'nats-stats';
             msg.statsType = statsType;
-            node.status({ fill: 'blue', shape: 'dot', text: `stats: ${statsType}` });
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `stats: ${statsType}`,
+            });
             node.send(msg);
             break;
           }
@@ -811,7 +897,6 @@ module.exports = function (RED) {
             node.error(`Unknown operation: ${operation}`);
             return;
         }
-
       } catch (err) {
         node.error(`Service operation failed: ${err.message}`, msg);
         msg.error = err.message;
