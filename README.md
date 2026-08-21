@@ -236,8 +236,8 @@ msg.payload.command = "toggle"  // Toggle start/stop
 
 ## Requirements
 
-- Node-RED >= 3.0.0
-- Node.js >= 14.0.0
+- Node-RED >= 5.0.0
+- Node.js >= 22.9.0
 - NATS Server (local, remote or Leaf Node)
 
 ---
@@ -346,6 +346,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Clustering | ✅ Complete | `nats-suite-server` | Multi-server connections |
 | Leaf Nodes | ✅ Complete | `nats-suite-server-manager` | Edge server connections |
 | Message TTL | ✅ Complete | `nats-suite-publish` | Message expiration |
+| Message Tracing | 🔄 Partial | `nats-suite-server` | One connection-level switch; covers `nats-suite-publish` and `nats-suite-stream-publisher` today, not yet KV/Object Store/Service |
 | Subject Mapping | ❌ Not Implemented | - | Server-side subject transforms |
 | Weighted Mapping | ❌ Not Implemented | - | Canary testing / A-B routing |
 
@@ -374,10 +375,10 @@ This section provides a comprehensive overview of NATS features and their implem
 | Retention: WorkQueue | ✅ Complete | `nats-suite-stream-publisher` | Work queue semantics |
 | Message Replay | ✅ Complete | `nats-suite-stream-consumer` | Replay from sequence/time |
 | Deduplication | ✅ Complete | `nats-suite-stream-publisher` | Via message ID |
-| Stream Mirrors | ❌ Not Implemented | - | Read-only stream replication |
-| Stream Sources | ❌ Not Implemented | - | Multi-stream aggregation |
-| Stream Republish | ❌ Not Implemented | - | Auto-republish to subjects |
-| Subject Transforms | ❌ Not Implemented | - | Stream-level subject mapping |
+| Stream Mirrors | 🔄 Partial | `nats-suite-stream-publisher` | No dedicated editor fields yet; reachable today via a native `msg.payload` config override on create/update |
+| Stream Sources | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
+| Stream Republish | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
+| Subject Transforms | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Consumer Filter Subject | 🔄 Partial | `nats-suite-stream-consumer` | Basic filtering available |
 
 #### KV Store Features
@@ -399,7 +400,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | TTL | ✅ Complete | `nats-suite-kv-put` | Time-to-live for entries |
 | Compression | ✅ Complete | `nats-suite-kv-put` | Value compression |
 | Key History | ✅ Complete | `nats-suite-kv-get` | Access revision history with configurable limit |
-| CAS (Compare-And-Swap) | ❌ Not Implemented | - | Atomic conditional updates |
+| CAS (Compare-And-Swap) | ✅ Complete | `nats-suite-kv-put` | `update` operation is revision-checked (`kv.update(key, value, revision)`) |
 
 #### Object Store Features
 
@@ -449,9 +450,9 @@ This section provides a comprehensive overview of NATS features and their implem
 
 | Category | Implemented | In Development | Not Implemented | Coverage |
 |----------|-------------|----------------|-----------------|----------|
-| **Core NATS** | 15 | 0 | 2 | 88% |
-| **JetStream** | 20 | 0 | 5 | 80% |
-| **KV Store** | 15 | 0 | 1 | 94% |
+| **Core NATS** | 14 | 1 | 2 | 82% |
+| **JetStream** | 20 | 5 | 0 | 80% |
+| **KV Store** | 16 | 0 | 0 | 100% |
 | **Object Store** | 9 | 0 | 4 | 69% |
 | **Services API** | 7 | 0 | 1 | 87% |
 | **Server Management** | 8 | 0 | 0 | 100% |
@@ -466,12 +467,11 @@ This section provides a comprehensive overview of NATS features and their implem
 
 ### Roadmap
 
-Features planned for future releases:
+Features planned for future releases (see `NATS-3.4-GAP-PLAN.md` for the full
+list and build order):
 
-1. **KV Compare-And-Swap** - Atomic conditional updates
-2. **Stream Mirrors** - Read-only stream replication
-3. **Stream Sources** - Aggregate from multiple streams
-4. **Object Store Watch** - Monitor object changes
+1. **Stream Mirrors / Sources / Republish / Subject Transforms** - dedicated editor fields (currently reachable only via a raw `msg.payload` override)
+2. **Object Store Watch** - Monitor object changes
 
 ---
 

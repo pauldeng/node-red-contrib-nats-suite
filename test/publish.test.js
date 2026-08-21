@@ -703,7 +703,153 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
   }
 });
 
-// --- 6. Teardown / redeploy leak check ---------------------------------------
+// --- 6. Message tracing (Step 2: connection-level switch) -------------------
+// nats-server actually implements tracing (verified against the real
+// nats-server:2.14.5 container: publishing with traceDestination set delivers
+// both the original message AND a JSON trace event to that destination
+// subject) so these assert on the real wire trace event, not just "no throw".
+
+test('publish: server-level enableTracing makes a plain publish() emit a real NATS trace event and still deliver the message', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('trace-pub-on-');
+  const subject = `test.publish.trace.data.${id}`;
+  const traceSubject = `test.publish.trace.dest.${id}`;
+  const probe = `probe-${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+
+  const nodes = [
+    serverNode(srv, { enableTracing: true, traceDestination: traceSubject }),
+    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
+    const delivered = subscribeOnce(directNc, subject, 8000);
+    await triggerInject(inj);
+    const [trace, wirePayload] = await Promise.all([traceEvent, delivered]);
+
+    assert.equal(wirePayload, probe, 'the real message must still be delivered, not swallowed by tracing');
+    const traceJson = JSON.parse(trace);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+    assert.ok(Array.isArray(traceJson.events) && traceJson.events.length > 0);
+  } finally {
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: enableTracing off (the default) never emits a trace event', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('trace-pub-off-');
+  const subject = `test.publish.trace.off.data.${id}`;
+  const traceSubject = `test.publish.trace.off.dest.${id}`;
+  const probe = `probe-${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+
+  const nodes = [
+    serverNode(srv),
+    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const noTrace = subscribeOnce(directNc, traceSubject, 1500);
+    const delivered = subscribeOnce(directNc, subject, 8000);
+    await triggerInject(inj);
+
+    await assert.rejects(noTrace, /Timed out/, 'no trace event should be emitted when tracing is off');
+    assert.equal(await delivered, probe);
+  } finally {
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: server-level enableTracing also threads through mode "request"', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('trace-req-on-');
+  const subject = `test.publish.trace.request.${id}`;
+  const traceSubject = `test.publish.trace.request.dest.${id}`;
+  const probe = `probe-${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+
+  const nodes = [
+    serverNode(srv, { enableTracing: true, traceDestination: traceSubject }),
+    publishNode(pub, {
+      server: srv,
+      mode: 'request',
+      datapointid: subject,
+      requestTimeout: 5000,
+      outputs: 1,
+      wires: [[dbg]],
+    }),
+    injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    // Test process acts as the responder.
+    const sub = directNc.subscribe(subject);
+    (async () => {
+      for await (const m of sub) {
+        m.respond(new TextEncoder().encode('pong'));
+        break;
+      }
+    })().catch(() => {});
+
+    const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
+    const debugCaught = comms.waitForDebug(dbg, 8000);
+    await triggerInject(inj);
+    const [trace, debugMsg] = await Promise.all([traceEvent, debugCaught]);
+
+    assert.equal(debugMsg.payload, 'pong', 'the request/reply round trip must still complete under tracing');
+    const traceJson = JSON.parse(trace);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+  } finally {
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+// --- 7. Teardown / redeploy leak check ---------------------------------------
 
 test('publish: redeploying the flow repeatedly does not grow NATS connection count', async (t) => {
   if (!(await checkStack(t))) return;

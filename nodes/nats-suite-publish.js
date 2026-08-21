@@ -166,6 +166,7 @@ module.exports = function (RED) {
       try {
         const response = await natsnc.request(subject, requestPayload, {
           timeout: requestTimeout,
+          ...node.config.getTraceOptions(),
         });
         const requestTime = Date.now() - startTime;
         let responsePayload;
@@ -266,10 +267,11 @@ module.exports = function (RED) {
         const subject = resolveSubject(msg);
         if (!subject) {
           if (mode === 'reply') {
-            node.warn(
-              'Reply mode: no reply subject (msg._reply or msg._unsreply) found. Cannot send reply.'
+            done(
+              new Error(
+                'Reply mode: no reply subject (msg._reply or msg._unsreply) found. Cannot send reply.'
+              )
             );
-            done();
             return;
           }
           done(
@@ -292,7 +294,7 @@ module.exports = function (RED) {
         }
 
         const natsnc = await node.config.getConnection();
-        const publishOptions = {};
+        const publishOptions = { ...node.config.getTraceOptions() };
         const hdrs = buildHeaders(msg);
         if (hdrs) publishOptions.headers = hdrs;
 

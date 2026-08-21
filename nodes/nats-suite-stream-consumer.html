@@ -9,14 +9,13 @@
       consumerName: { value: 'default-consumer', required: true },
       createOnInit: { value: true },
       filterSubject: { value: '' },
-      consumerType: { value: 'pull' },
       ackPolicy: { value: 'explicit' },
       deliverPolicy: { value: 'new' },
+      startSequence: { value: 1 },
+      startTime: { value: '' },
       ackWait: { value: '30s' },
       maxDeliver: { value: 5 },
       maxAckPending: { value: 1000 },
-      idleHeartbeat: { value: '5s' },
-      flowControl: { value: false },
       batchSize: { value: 1 },
       maxWait: { value: 1000 },
       operation: { value: 'consume' },
@@ -72,30 +71,20 @@
         updateConsumerConfigVisibility();
       });
 
-      // Consumer type handler
-      $('#node-input-consumerType').on('change', function () {
-        if ($(this).val() === 'push') {
-          $('#idle-heartbeat-row').slideDown(200);
-          // Enable flow control checkbox for push consumers
-          $('#node-input-flowControl').prop('disabled', false);
-          $('#flow-control-row label').removeClass('nats-label-disabled');
-        } else {
-          $('#idle-heartbeat-row').slideUp(200);
-          // Disable and uncheck flow control for pull consumers
-          $('#node-input-flowControl')
-            .prop('checked', false)
-            .prop('disabled', true);
-          $('#flow-control-row label').addClass('nats-label-disabled');
-        }
-      });
-
       // Create on init handler - show/hide consumer-specific configuration
       $('#node-input-createOnInit').on('change', function () {
         updateConsumerConfigVisibility();
       });
 
+      // Deliver policy handler - show start sequence/time fields when needed
+      $('#node-input-deliverPolicy').on('change', function () {
+        const policy = $(this).val();
+        $('#start-sequence-row').toggle(policy === 'by_start_sequence');
+        $('#start-time-row').toggle(policy === 'by_start_time');
+      });
+
       $('#node-input-operation').trigger('change');
-      $('#node-input-consumerType').trigger('change');
+      $('#node-input-deliverPolicy').trigger('change');
     },
   });
 </script>
@@ -266,29 +255,23 @@
             <label><i class="fa fa-filter"></i>Filter Subject</label>
             <input type="text" id="node-input-filterSubject" placeholder="sensor.temperature (optional)">
           </div>
-          <div class="nats-grid">
-            <div class="nats-form-row">
-              <label><i class="fa fa-exchange"></i>Consumer Type</label>
-              <select id="node-input-consumerType">
-                <option value="pull">Pull-based</option>
-                <option value="push">Push-based</option>
-              </select>
-            </div>
-            <div class="nats-form-row">
-              <label><i class="fa fa-truck"></i>Deliver Policy</label>
-              <select id="node-input-deliverPolicy">
-                <option value="new">New Only</option>
-                <option value="all">All</option>
-                <option value="last">Last</option>
-                <option value="by_start_sequence">By Sequence</option>
-                <option value="by_start_time">By Time</option>
-              </select>
-            </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-truck"></i>Deliver Policy</label>
+            <select id="node-input-deliverPolicy">
+              <option value="new">New Only</option>
+              <option value="all">All</option>
+              <option value="last">Last</option>
+              <option value="by_start_sequence">By Sequence</option>
+              <option value="by_start_time">By Time</option>
+            </select>
           </div>
-          <div class="nats-form-row" id="idle-heartbeat-row" style="display: none;">
-            <label><i class="fa fa-heartbeat"></i>Idle Heartbeat</label>
-            <input type="text" id="node-input-idleHeartbeat" placeholder="5s">
-            <div class="form-tips">Required for push-based consumers</div>
+          <div class="nats-form-row" id="start-sequence-row" style="display: none;">
+            <label><i class="fa fa-hashtag"></i>Start Sequence</label>
+            <input type="number" id="node-input-startSequence" placeholder="1" min="1">
+          </div>
+          <div class="nats-form-row" id="start-time-row" style="display: none;">
+            <label><i class="fa fa-clock-o"></i>Start Time</label>
+            <input type="text" id="node-input-startTime" placeholder="ISO 8601, e.g. 2026-01-01T00:00:00Z">
           </div>
         </div>
       </div>
@@ -333,10 +316,6 @@
             <label><i class="fa fa-hourglass-half"></i>Max Wait (ms)</label>
             <input type="number" id="node-input-maxWait" placeholder="1000" min="100">
           </div>
-        </div>
-        <div class="nats-checkbox-row" id="flow-control-row">
-          <input type="checkbox" id="node-input-flowControl">
-          <label for="node-input-flowControl"><i class="fa fa-tint"></i>Enable Flow Control</label>
         </div>
       </div>
     </div>

@@ -119,17 +119,12 @@ module.exports = function (RED) {
                 max_deliver: parseInt(config.maxDeliver, 10) || 5,
                 max_ack_pending: parseInt(config.maxAckPending, 10) || 1000,
                 deliver_policy: config.deliverPolicy || 'new',
-                flow_control: !!config.flowControl,
               };
 
-              // Only add idle_heartbeat for push-based consumers
-              // Note: idle_heartbeat is only valid for push-based consumers
-              // For pull-based consumers (default), this should not be set
-              if (config.consumerType === 'push' && config.idleHeartbeat) {
-                consumerConfig.idle_heartbeat = parseDuration(
-                  config.idleHeartbeat
-                );
-              }
+              // ConsumerConfig.idle_heartbeat and flow_control both require a
+              // push-based consumer (verified against a real nats-server:
+              // "consumer idle heartbeat requires a push based consumer");
+              // this node is pull-only, so neither is ever set.
 
               // Add filter subject if specified
               if (config.filterSubject) {
@@ -357,7 +352,16 @@ module.exports = function (RED) {
             node.log(`[STREAM CONSUMER] Paused during consumption`);
             break;
           }
-          await processMessage(send, jetMsg);
+          try {
+            await processMessage(send, jetMsg);
+          } catch (err) {
+            // Don't let one bad message (e.g. JSON parse failure) abort the
+            // rest of an already-fetched batch; log and move on so the
+            // remaining pulled messages still get processed/acked.
+            node.warn(
+              `[STREAM CONSUMER] Failed to process message seq ${jetMsg.seq}: ${err.message}`
+            );
+          }
           count++;
         }
 
@@ -512,12 +516,6 @@ module.exports = function (RED) {
                 : config.maxAckPending
                   ? parseInt(config.maxAckPending, 10)
                   : undefined,
-              flow_control:
-                msg.flowControl !== undefined
-                  ? !!msg.flowControl
-                  : config.flowControl !== undefined
-                    ? !!config.flowControl
-                    : undefined,
             };
 
             // Remove undefined values

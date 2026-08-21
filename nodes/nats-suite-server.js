@@ -22,6 +22,12 @@ module.exports = function (RED) {
     this.tlsCertFile = n.tlsCertFile || '';
     this.tlsKeyFile = n.tlsKeyFile || '';
 
+    // Message tracing (NATS-3.4-GAP-PLAN.md Step 2): one connection-level
+    // switch, not a per-message option. The editor requires traceDestination
+    // once enableTracing is checked, so "on but empty" can't be saved.
+    this.enableTracing = !!n.enableTracing;
+    this.traceDestination = (n.traceDestination || '').trim();
+
     const isDebug = !!n.debug;
 
     if (isDebug) {
@@ -338,11 +344,17 @@ module.exports = function (RED) {
       if (closing) return Promise.reject(closeError());
       return new Promise(resolve => {
         retryWake = resolve;
+        // Same jitter size as the native client's own default (non-TLS)
+        // reconnect delay, so many config nodes retrying an unreachable
+        // broker at Node-RED startup don't all hammer it in lockstep every
+        // second (the native client itself jitters up to 1000ms for TLS,
+        // but this pre-first-connect loop doesn't need to match that).
+        const jitter = Math.floor(Math.random() * 100);
         retryTimer = setTimeout(() => {
           retryTimer = null;
           retryWake = null;
           resolve();
-        }, ConnectionOptions.reconnectTimeWait);
+        }, ConnectionOptions.reconnectTimeWait + jitter);
       });
     };
 
@@ -625,6 +637,14 @@ module.exports = function (RED) {
         uptime: this.getUptime(),
         uptimeFormatted: this.formatUptime(this.getUptime()),
       };
+    };
+
+    // TraceOptions per @nats-io/nats-core: {traceDestination?, traceOnly?}.
+    // traceOnly suppresses delivery entirely (trace-only dry run) - never set
+    // it here, this switch means "also trace", not "don't actually publish".
+    this.getTraceOptions = () => {
+      if (!this.enableTracing || !this.traceDestination) return undefined;
+      return { traceDestination: this.traceDestination };
     };
 
     const closeConnection = async connection => {

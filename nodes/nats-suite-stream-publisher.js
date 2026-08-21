@@ -30,6 +30,7 @@ module.exports = function (RED) {
     let jsClient = null;
     let jsm = null;
     let streamReady = false;
+    let ensureStreamPromise = null;
     let statusRevertTimer = null;
 
     // Helper: Update node status based on connection state
@@ -78,8 +79,19 @@ module.exports = function (RED) {
       return ['*'];
     };
 
-    // Helper: Get or create stream
-    const ensureStream = async () => {
+    // Helper: Get or create stream. Concurrent callers (e.g. the fire-and-
+    // forget init call racing an early input message) share one in-flight
+    // call instead of each independently checking-then-creating the stream.
+    const ensureStream = () => {
+      if (!ensureStreamPromise) {
+        ensureStreamPromise = ensureStreamImpl().finally(() => {
+          ensureStreamPromise = null;
+        });
+      }
+      return ensureStreamPromise;
+    };
+
+    const ensureStreamImpl = async () => {
       try {
         await ensureJetStream();
 
@@ -124,8 +136,6 @@ module.exports = function (RED) {
                 parseInt(config.maxMsgsPerSubject, 10) || -1,
               max_msg_size: parseInt(config.maxMsgSize, 10) || -1,
               compression: config.compression || 'none',
-              allow_direct: !!config.allowDirect,
-              mirror_direct: !!config.mirrorDirect,
               deny_delete: !!config.denyDelete,
               deny_purge: !!config.denyPurge,
               allow_rollup_hdrs: !!config.allowRollupHdrs,
@@ -280,14 +290,6 @@ module.exports = function (RED) {
                       ? parseInt(config.maxMsgSize, 10)
                       : -1,
                 compression: msg.compression || config.compression || 'none',
-                allow_direct:
-                  msg.allowDirect !== undefined
-                    ? msg.allowDirect
-                    : config.allowDirect || false,
-                mirror_direct:
-                  msg.mirrorDirect !== undefined
-                    ? msg.mirrorDirect
-                    : config.mirrorDirect || false,
                 deny_delete:
                   msg.denyDelete !== undefined
                     ? msg.denyDelete
@@ -308,6 +310,10 @@ module.exports = function (RED) {
                   msg.allowMsgSchedules !== undefined
                     ? msg.allowMsgSchedules
                     : config.allowMsgSchedules || false,
+                sealed:
+                  msg.sealed !== undefined
+                    ? msg.sealed
+                    : config.sealed || false,
               };
               node.log(
                 `[STREAM PUB] Creating stream from properties: ${streamConfig.name}`
@@ -436,18 +442,6 @@ module.exports = function (RED) {
                   msg.compression ||
                   config.compression ||
                   currentStream.config.compression,
-                allow_direct:
-                  msg.allowDirect !== undefined
-                    ? msg.allowDirect
-                    : config.allowDirect !== undefined
-                      ? config.allowDirect
-                      : currentStream.config.allow_direct,
-                mirror_direct:
-                  msg.mirrorDirect !== undefined
-                    ? msg.mirrorDirect
-                    : config.mirrorDirect !== undefined
-                      ? config.mirrorDirect
-                      : currentStream.config.mirror_direct,
                 sealed:
                   msg.sealed !== undefined
                     ? msg.sealed
@@ -674,6 +668,23 @@ module.exports = function (RED) {
         if (msgHeaders) publishOptions.headers = msgHeaders;
         if (msg._msgID !== undefined) publishOptions.msgID = msg._msgID;
         if (msg.schedule !== undefined) publishOptions.schedule = msg.schedule;
+
+        // @nats-io/jetstream's JetStreamPublishOptions has no
+        // traceDestination field, and its publish() silently drops unknown
+        // option keys (verified against the installed 3.4.0 client and a
+        // real server) - message tracing only exists on the wire as the
+        // Nats-Trace-Dest header, so the connection-level switch is applied
+        // as a header instead of an option. Single connection-level toggle
+        // only (NATS-3.4-GAP-PLAN.md decision 2) - no per-message override.
+        // Set directly on publishOptions.headers (not a separate object)
+        // so it merges with whatever headers already won above (msg.headers
+        // or a native msg.options.headers passthrough) instead of clobbering
+        // them.
+        const traceDestination = node.serverConfig.getTraceOptions()?.traceDestination;
+        if (traceDestination) {
+          if (!publishOptions.headers) publishOptions.headers = natsHeaders();
+          publishOptions.headers.set('Nats-Trace-Dest', traceDestination);
+        }
         if (msg.cancelSchedule !== undefined)
           publishOptions.cancelSchedule = msg.cancelSchedule;
 

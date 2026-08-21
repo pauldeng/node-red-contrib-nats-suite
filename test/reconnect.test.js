@@ -245,7 +245,6 @@ const streamConsumerNode = (
   consumerName,
   createOnInit: true,
   filterSubject: subject,
-  consumerType: 'pull',
   ackPolicy: 'none',
   // The flow is deployed before its stream exists. "all" lets the consumer
   // still observe the first message if stream creation wins the startup race.
@@ -253,8 +252,6 @@ const streamConsumerNode = (
   ackWait: '30s',
   maxDeliver: 5,
   maxAckPending: 1000,
-  idleHeartbeat: '5s',
-  flowControl: false,
   batchSize: 1,
   maxWait: 2000,
   operation: 'consume',

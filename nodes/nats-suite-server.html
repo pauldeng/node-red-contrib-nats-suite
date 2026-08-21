@@ -14,6 +14,17 @@
       timeout: { value: 10000 },
       pingInterval: { value: 30000 },
       maxPingOut: { value: 3 },
+      enableTracing: { value: false },
+      traceDestination: {
+        value: "",
+        validate: function (v) {
+          // `this` is the node's data object here, not the DOM - validation
+          // also runs on the canvas/deploy with no edit dialog open, where a
+          // DOM selector always resolves empty and silently reports valid.
+          if (!this.enableTracing) return true;
+          return !!v && v.trim().length > 0;
+        }
+      },
       debug: { value: false }
     },
     credentials: {
@@ -50,17 +61,20 @@
         }
       };
       
-      // TLS handler
-      const updateTLSFields = () => {
-        if ($('#node-config-input-enableTLS').is(':checked')) {
-          $('#tls-config-section').slideDown(200);
+      // Checkbox-driven section toggle (TLS, Tracing, ...)
+      const makeCheckboxToggle = (checkboxSel, sectionSel) => () => {
+        if ($(checkboxSel).is(':checked')) {
+          $(sectionSel).slideDown(200);
         } else {
-          $('#tls-config-section').slideUp(200);
+          $(sectionSel).slideUp(200);
         }
       };
-      
+      const updateTLSFields = makeCheckboxToggle('#node-config-input-enableTLS', '#tls-config-section');
+      const updateTracingFields = makeCheckboxToggle('#node-config-input-enableTracing', '#tracing-config-section');
+
       updateAuthFields();
       updateTLSFields();
+      updateTracingFields();
 
       // Sync nkeySeed value to the nkey-only textarea on open
       $('#node-config-input-nkeySeed-nkey').val($('#node-config-input-nkeySeed').val());
@@ -75,6 +89,7 @@
 
       $('#node-config-input-authMethod').on('change', updateAuthFields);
       $('#node-config-input-enableTLS').on('change', updateTLSFields);
+      $('#node-config-input-enableTracing').on('change', updateTracingFields);
     },
     oneditsave: function() {
       // Ensure the nkey-only field value is written back to the credential field Node-RED reads
@@ -371,9 +386,23 @@
             <span class="form-tips" style="margin: 0;">before disconnect</span>
           </div>
         </div>
+
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--red-ui-form-input-border-color);">
+          <div class="nats-checkbox-row">
+            <input type="checkbox" id="node-config-input-enableTracing">
+            <label for="node-config-input-enableTracing"><i class="fa fa-crosshairs"></i>Enable Message Tracing</label>
+          </div>
+          <div id="tracing-config-section" style="display: none; margin-top: 12px;">
+            <div class="nats-form-row">
+              <label><i class="fa fa-map-signs"></i>Trace Destination Subject</label>
+              <input type="text" id="node-config-input-traceDestination" placeholder="$SYS.trace.my-app">
+              <div class="form-tips">Publish/request and JetStream publish made through this connection report their delivery trace to this subject (KV, Object Store, and Service nodes aren't wired in yet). Applies to the whole connection - not configurable per node or per message.</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-    
+
   </div>
 </script>
 
@@ -402,4 +431,8 @@ Enable TLS for encrypted connections. For mutual TLS (mTLS), provide client cert
 ### Reconnection
 
 Retries indefinitely using the native NATS reconnect loop and the configured reconnect wait.
+
+### Message Tracing
+
+One switch for the whole connection: when enabled, publish/request (`nats-suite-publish`) and JetStream publish (`nats-suite-stream-publisher`) made through it also report delivery trace to the configured destination subject. KV, Object Store, and Service nodes don't carry tracing yet. Not a per-message or per-node setting.
 </script>

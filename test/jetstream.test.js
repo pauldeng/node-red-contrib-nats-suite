@@ -33,6 +33,7 @@ const {
   triggerInject,
   connectComms,
   connectDirectNats,
+  subscribeOnce,
   serverNode,
 } = require('./lib/harness');
 
@@ -150,14 +151,11 @@ function streamConsumerNode(
     consumerName,
     createOnInit: true,
     filterSubject: subject,
-    consumerType: 'pull',
     ackPolicy: 'explicit',
     deliverPolicy: 'all',
     ackWait: '30s',
     maxDeliver: 5,
     maxAckPending: 1000,
-    idleHeartbeat: '5s',
-    flowControl: false,
     batchSize: 1,
     maxWait: 1500,
     operation: 'consume',
@@ -451,6 +449,105 @@ test(
     }
   }
 );
+
+// --- Message tracing (Step 2): connection-level switch only (no per-message
+// override - NATS-3.4-GAP-PLAN.md decision 2). JetStreamPublishOptions has no
+// traceDestination field and @nats-io/jetstream's publish() silently drops
+// unknown option keys, so this proves the header-based workaround actually
+// reaches the wire, not just "the option didn't throw".
+
+test('stream-publisher: server-level enableTracing makes a JetStream publish() emit a real NATS trace event', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('trace-jspub-on-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.trace.${id}`;
+  const traceSubject = `test.jetstream.trace.dest.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+
+  const nodes = [
+    serverNode(srv, { enableTracing: true, traceDestination: traceSubject }),
+    streamPublisherNode(spub, srv, streamName, subject, dbg),
+    injectNode(inj, spub, [{ p: 'payload', v: 'hello', vt: 'str' }]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
+    const published = comms.waitForDebug(dbg, 8000);
+    await triggerInject(inj);
+    const [trace, pubAck] = await Promise.all([traceEvent, published]);
+
+    assert.equal(pubAck.published, true, 'the real JetStream publish must still succeed under tracing');
+    const traceJson = JSON.parse(trace);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
+
+test('stream-publisher: enableTracing off (the default) never emits a trace event, and msg.options.traceDestination does not turn it on', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('trace-jspub-off-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.trace.off.${id}`;
+  const traceSubject = `test.jetstream.trace.off.dest.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+
+  const nodes = [
+    serverNode(srv),
+    streamPublisherNode(spub, srv, streamName, subject, dbg),
+    injectNode(inj, spub, [
+      { p: 'payload', v: 'hello', vt: 'str' },
+      // Tracing is a connection-level-only switch (NATS-3.4-GAP-PLAN.md
+      // decision 2) - a msg.options passthrough field of the same name must
+      // NOT be treated as a per-message trace override.
+      { p: 'options', v: JSON.stringify({ traceDestination: traceSubject }), vt: 'json' },
+    ]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const noTrace = subscribeOnce(directNc, traceSubject, 1500);
+    const published = comms.waitForDebug(dbg, 8000);
+    await triggerInject(inj);
+
+    await assert.rejects(noTrace, /Timed out/, 'no trace event should be emitted when connection-level tracing is off');
+    const pubAck = await published;
+    assert.equal(pubAck.published, true);
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
 
 test(
   'stream-consumer: pause/resume and info use the server APIs',
