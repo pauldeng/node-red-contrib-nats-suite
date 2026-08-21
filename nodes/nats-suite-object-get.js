@@ -51,38 +51,33 @@ module.exports = function (RED) {
     const getObjectStore = async () => {
       if (objectStore) return objectStore;
 
-      try {
-        if (node.bucketConfig) {
-          objectStore = await node.bucketConfig.getObjectStore();
-          return objectStore;
-        }
-
-        const nc = await node.serverConfig.getConnection();
-        const createOptions = {
-          description: node.description || undefined,
-          max_bytes: node.maxBytes || undefined,
-          ttl: node.maxAge ? nanos(node.maxAge * 1000) : undefined,
-          storage: node.storage === 'memory' ? 'memory' : 'file',
-          replicas: node.replicas,
-          compression: node.compression,
-        };
-
-        Object.keys(createOptions).forEach(key => {
-          if (createOptions[key] === undefined) delete createOptions[key];
-        });
-
-        objectStore = await new Objm(nc).create(node.bucket, createOptions);
+      if (node.bucketConfig) {
+        objectStore = await node.bucketConfig.getObjectStore();
         return objectStore;
-      } catch (err) {
-        node.error(`Failed to get Object Store: ${err.message}`);
-        throw err;
       }
+
+      const nc = await node.serverConfig.getConnection();
+      const createOptions = {
+        description: node.description || undefined,
+        max_bytes: node.maxBytes || undefined,
+        ttl: node.maxAge ? nanos(node.maxAge * 1000) : undefined,
+        storage: node.storage === 'memory' ? 'memory' : 'file',
+        replicas: node.replicas,
+        compression: node.compression,
+      };
+
+      Object.keys(createOptions).forEach(key => {
+        if (createOptions[key] === undefined) delete createOptions[key];
+      });
+
+      objectStore = await new Objm(nc).create(node.bucket, createOptions);
+      return objectStore;
     };
 
     this.serverConfig.registerConnectionUser(node.id);
     node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
 
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Check if this is a list operation
         const operation = msg.operation || config.operation || 'get';
@@ -111,12 +106,13 @@ module.exports = function (RED) {
             node.log(`[OBJECT LIST] Found ${objects.length} objects`);
           }
 
-          node.send(msg);
+          send(msg);
           node.status({
             fill: 'green',
             shape: 'dot',
             text: `${objects.length} objects`,
           });
+          done();
           return;
         }
 
@@ -131,8 +127,8 @@ module.exports = function (RED) {
         }
 
         if (!objectName) {
-          node.error('No object name specified', msg);
           node.status({ fill: 'red', shape: 'ring', text: 'no name' });
+          done(new Error('No object name specified'));
           return;
         }
 
@@ -140,9 +136,9 @@ module.exports = function (RED) {
         const obj = await os.get(objectName);
 
         if (!obj) {
-          node.error(`Object not found: ${objectName}`, msg);
           msg.error = 'Object not found';
-          node.send(msg);
+          send(msg);
+          done(new Error(`Object not found: ${objectName}`));
           return;
         }
 
@@ -181,23 +177,25 @@ module.exports = function (RED) {
           );
         }
 
-        node.send(msg);
+        send(msg);
         node.status({
           fill: 'green',
           shape: 'dot',
           text: `got: ${objectName}`,
         });
+        done();
       } catch (err) {
-        node.error(`Object Store GET failed: ${err.message}`, msg);
         msg.error = err.message;
         msg.operation = 'GET';
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 
-    node.on('close', function () {
+    node.on('close', function (done) {
       this.serverConfig.unregisterConnectionUser(node.id);
+      done();
     });
   }
 

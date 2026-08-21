@@ -247,154 +247,142 @@ module.exports = function (RED) {
       }
     };
 
-    // Helper: Service discovery
+    // Helper: Service discovery. Only ever called from the input handler,
+    // which reports failure via done(err) - no separate node.error() here.
     const discoverServices = async () => {
-      try {
-        nc = await node.serverConfig.getConnection();
+      nc = await node.serverConfig.getConnection();
 
-        const serviceName = discoveryFilter;
-        const services = [];
+      const serviceName = discoveryFilter;
+      const services = [];
 
-        // Get service client
-        const client = new Svcm(nc).client();
+      // Get service client
+      const client = new Svcm(nc).client();
 
-        // Use info() for discovery - it returns service information
-        const filter = serviceName === '*' ? undefined : serviceName;
+      // Use info() for discovery - it returns service information
+      const filter = serviceName === '*' ? undefined : serviceName;
 
-        // Collect service info using async iterator
-        for await (const info of await client.info(filter)) {
-          services.push({
-            name: info.name,
-            id: info.id,
-            version: info.version,
-            type: info.type || 'service',
-            description: info.description || '',
-            metadata: info.metadata || {},
-            endpoints: info.endpoints || [],
-          });
-        }
-
-        return services;
-      } catch (err) {
-        node.error(`[SERVICE] Discovery failed: ${err.message}`);
-        throw err;
+      // Collect service info using async iterator
+      for await (const info of await client.info(filter)) {
+        services.push({
+          name: info.name,
+          id: info.id,
+          version: info.version,
+          type: info.type || 'service',
+          description: info.description || '',
+          metadata: info.metadata || {},
+          endpoints: info.endpoints || [],
+        });
       }
+
+      return services;
     };
 
-    // Helper: Service stats
+    // Helper: Service stats. Only ever called from the input handler, which
+    // reports failure via done(err) - no separate node.error() here.
     const getServiceStats = async () => {
-      try {
-        nc = await node.serverConfig.getConnection();
+      nc = await node.serverConfig.getConnection();
 
-        const serviceName = discoveryFilter;
-        const stats = [];
+      const serviceName = discoveryFilter;
+      const stats = [];
 
-        // Get service client
-        const client = new Svcm(nc).client();
+      // Get service client
+      const client = new Svcm(nc).client();
 
-        // Get stats for services using async iterator
-        const filter = serviceName === '*' ? undefined : serviceName;
+      // Get stats for services using async iterator
+      const filter = serviceName === '*' ? undefined : serviceName;
 
-        for await (const info of await client.stats(filter)) {
-          stats.push({
-            name: info.name,
-            id: info.id,
-            version: info.version,
-            endpoints: info.endpoints || [],
-            started: info.started,
-            type: info.type || 'service',
-          });
-        }
-
-        return stats;
-      } catch (err) {
-        node.error(`[SERVICE] Stats failed: ${err.message}`);
-        throw err;
+      for await (const info of await client.stats(filter)) {
+        stats.push({
+          name: info.name,
+          id: info.id,
+          version: info.version,
+          endpoints: info.endpoints || [],
+          started: info.started,
+          type: info.type || 'service',
+        });
       }
+
+      return stats;
     };
 
     // ==================== NATS STATS FUNCTIONS ====================
 
-    // Get NATS server/connection statistics
+    // Get NATS server/connection statistics. Only ever called from the
+    // input handler, which reports failure via done(err).
     const getNatsStats = async statsType => {
-      try {
-        nc = await node.serverConfig.getConnection();
-        const type = statsType || config.statsType || 'server';
+      nc = await node.serverConfig.getConnection();
+      const type = statsType || config.statsType || 'server';
 
-        switch (type) {
-          case 'server': {
-            const stats = nc.stats();
-            return {
-              type: 'server',
+      switch (type) {
+        case 'server': {
+          const stats = nc.stats();
+          return {
+            type: 'server',
+            inMsgs: stats.inMsgs,
+            outMsgs: stats.outMsgs,
+            inBytes: stats.inBytes,
+            outBytes: stats.outBytes,
+            // Stats has no reconnect count; the config node already
+            // tracks it from the connection's status() events.
+            reconnects:
+              node.serverConfig.getConnectionStats().reconnectAttempts,
+          };
+        }
+
+        case 'jetstream': {
+          const jsm = await jetstreamManager(nc);
+          const accountInfo = await jsm.getAccountInfo();
+          return {
+            type: 'jetstream',
+            memory: accountInfo.memory,
+            store: accountInfo.storage,
+            api: accountInfo.api,
+            limits: accountInfo.limits,
+          };
+        }
+
+        case 'connections': {
+          const serverInfo = nc.info;
+          return {
+            type: 'connections',
+            server_id: serverInfo.server_id,
+            version: serverInfo.version,
+            connections: serverInfo.connections || 0,
+          };
+        }
+
+        case 'all': {
+          const stats = nc.stats();
+          const jsm = await jetstreamManager(nc);
+          const accountInfo = await jsm.getAccountInfo();
+          const serverInfo = nc.info;
+
+          return {
+            type: 'all',
+            server: {
               inMsgs: stats.inMsgs,
               outMsgs: stats.outMsgs,
               inBytes: stats.inBytes,
               outBytes: stats.outBytes,
-              // Stats has no reconnect count; the config node already
-              // tracks it from the connection's status() events.
               reconnects:
                 node.serverConfig.getConnectionStats().reconnectAttempts,
-            };
-          }
-
-          case 'jetstream': {
-            const jsm = await jetstreamManager(nc);
-            const accountInfo = await jsm.getAccountInfo();
-            return {
-              type: 'jetstream',
+            },
+            jetstream: {
               memory: accountInfo.memory,
               store: accountInfo.storage,
               api: accountInfo.api,
               limits: accountInfo.limits,
-            };
-          }
-
-          case 'connections': {
-            const serverInfo = nc.info;
-            return {
-              type: 'connections',
+            },
+            connections: {
               server_id: serverInfo.server_id,
               version: serverInfo.version,
               connections: serverInfo.connections || 0,
-            };
-          }
-
-          case 'all': {
-            const stats = nc.stats();
-            const jsm = await jetstreamManager(nc);
-            const accountInfo = await jsm.getAccountInfo();
-            const serverInfo = nc.info;
-
-            return {
-              type: 'all',
-              server: {
-                inMsgs: stats.inMsgs,
-                outMsgs: stats.outMsgs,
-                inBytes: stats.inBytes,
-                outBytes: stats.outBytes,
-                reconnects:
-                  node.serverConfig.getConnectionStats().reconnectAttempts,
-              },
-              jetstream: {
-                memory: accountInfo.memory,
-                store: accountInfo.storage,
-                api: accountInfo.api,
-                limits: accountInfo.limits,
-              },
-              connections: {
-                server_id: serverInfo.server_id,
-                version: serverInfo.version,
-                connections: serverInfo.connections || 0,
-              },
-            };
-          }
-
-          default:
-            throw new Error(`Unknown stats type: ${type}`);
+            },
+          };
         }
-      } catch (err) {
-        node.error(`[STATS] Failed to get stats: ${err.message}`);
-        throw err;
+
+        default:
+          throw new Error(`Unknown stats type: ${type}`);
       }
     };
 
@@ -740,7 +728,10 @@ module.exports = function (RED) {
       }
       // Periodic health check if enabled
       if (config.periodicCheck && config.checkInterval > 0) {
-        healthCheckInterval = setInterval(performHealthCheck, config.checkInterval * 1000);
+        healthCheckInterval = setInterval(
+          performHealthCheck,
+          config.checkInterval * 1000
+        );
       }
     } else {
       node.status({ fill: 'grey', shape: 'ring', text: 'ready' });
@@ -748,7 +739,7 @@ module.exports = function (RED) {
 
     // ==================== INPUT HANDLER ====================
 
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // For service mode, only handle start/stop operations
         // Service requests are handled automatically by the endpoint handler
@@ -762,7 +753,8 @@ module.exports = function (RED) {
               success: true,
               running: isServiceRunning,
             };
-            node.send(msg);
+            send(msg);
+            done();
             return;
           }
 
@@ -773,12 +765,14 @@ module.exports = function (RED) {
               success: true,
               running: isServiceRunning,
             };
-            node.send(msg);
+            send(msg);
+            done();
             return;
           }
 
           // For service mode, ignore other operations (service runs automatically)
           // Requests come through the endpoint handler, not the input handler
+          done();
           return;
         }
 
@@ -794,7 +788,7 @@ module.exports = function (RED) {
               success: true,
               running: isServiceRunning,
             };
-            node.send(msg);
+            send(msg);
             break;
 
           case 'stop':
@@ -804,7 +798,7 @@ module.exports = function (RED) {
               success: true,
               running: isServiceRunning,
             };
-            node.send(msg);
+            send(msg);
             break;
 
           case 'discover': {
@@ -817,7 +811,7 @@ module.exports = function (RED) {
               shape: 'dot',
               text: `${services.length} services`,
             });
-            node.send(msg);
+            send(msg);
             break;
           }
 
@@ -831,7 +825,7 @@ module.exports = function (RED) {
               shape: 'dot',
               text: `${statsResult.length} services`,
             });
-            node.send(msg);
+            send(msg);
             break;
           }
 
@@ -862,7 +856,7 @@ module.exports = function (RED) {
               shape: 'dot',
               text: `${pingResults.length} services`,
             });
-            node.send(msg);
+            send(msg);
             break;
           }
 
@@ -881,19 +875,20 @@ module.exports = function (RED) {
               shape: 'dot',
               text: `stats: ${statsType}`,
             });
-            node.send(msg);
+            send(msg);
             break;
           }
 
           default:
-            node.error(`Unknown operation: ${operation}`);
+            done(new Error(`Unknown operation: ${operation}`));
             return;
         }
+        done();
       } catch (err) {
-        node.error(`Service operation failed: ${err.message}`, msg);
         msg.error = err.message;
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 

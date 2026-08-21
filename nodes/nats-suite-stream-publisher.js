@@ -182,7 +182,9 @@ module.exports = function (RED) {
     // is exactly what this node needs - no custom handlers.
     const detachStatus = attachStatus(node, this.serverConfig);
 
-    // Stream Management Operations
+    // Stream Management Operations. Returns null on success, or the error to
+    // report via done(err) - node.error() itself is now the caller's job
+    // (on('input')), so a single failure doesn't fire Catch nodes twice.
     const performStreamOperation = async msg => {
       try {
         await ensureJetStream();
@@ -191,8 +193,7 @@ module.exports = function (RED) {
         const streamName = msg.stream || config.streamName || '';
 
         if (!streamName && operation !== 'list') {
-          node.error('Stream name required for operation');
-          return;
+          return new Error('Stream name required for operation');
         }
 
         switch (operation) {
@@ -602,13 +603,12 @@ module.exports = function (RED) {
           }
 
           default:
-            node.error(`Unknown operation: ${operation}`);
-            return;
+            return new Error(`Unknown operation: ${operation}`);
         }
 
         node.send(msg);
+        return null;
       } catch (err) {
-        node.error(`Stream operation failed: ${err.message}`, msg);
         msg.error = err.message;
 
         // Show error status for 2 seconds
@@ -618,17 +618,18 @@ module.exports = function (RED) {
         scheduleStatusRevert();
 
         node.send(msg);
+        return err;
       }
     };
 
     // Input handler
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Check if this is a stream management operation
         const operation = msg.operation || config.operation || 'publish';
 
         if (operation !== 'publish') {
-          await performStreamOperation(msg);
+          done(await performStreamOperation(msg));
           return;
         }
 
@@ -636,7 +637,7 @@ module.exports = function (RED) {
         if (!streamReady) {
           const ready = await ensureStream();
           if (!ready) {
-            node.error('Stream not ready', msg);
+            done(new Error('Stream not ready'));
             return;
           }
         }
@@ -644,9 +645,10 @@ module.exports = function (RED) {
         // Determine subject
         let subject = msg.subject || config.defaultSubject;
         if (!subject) {
-          node.error(
-            'No subject specified (use msg.subject or configure default subject)',
-            msg
+          done(
+            new Error(
+              'No subject specified (use msg.subject or configure default subject)'
+            )
           );
           return;
         }
@@ -684,14 +686,14 @@ module.exports = function (RED) {
 
         // Send message to output
         node.send(msg);
+        done();
       } catch (err) {
         msg.published = false;
         msg.error = err.message;
 
-        node.error(`Stream publish error: ${err.message}`, msg);
-
         // Send error message to output
         node.send(msg);
+        done(err);
       }
     });
 

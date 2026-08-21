@@ -10,7 +10,6 @@
       storeDir: { value: "" },
       leafRemoteUrl: { value: "" },
       leafRemoteUser: { value: "" },
-      leafRemotePass: { value: "" },
       autoStart: { value: true },
       debug: { value: false },
       // Binary source selection
@@ -34,8 +33,6 @@
       // Authentication options
       enableAuth: { value: false },
       authUser: { value: "" },
-      authPassword: { value: "" },
-      authToken: { value: "" },
       // New embedded server options
       serverName: { value: "" },
       maxConnections: { value: "" },
@@ -60,6 +57,14 @@
       noAdvertise: { value: false },
       connectRetries: { value: "" },
       enableLeafNodeMode: { value: false }
+    },
+    // Breaking change (v1.0.0): these three moved out of defaults and into
+    // credentials (encrypted), matching nats-suite-server. Existing plaintext
+    // values in flows.json do NOT carry over automatically.
+    credentials: {
+      leafRemotePass: { type: "password" },
+      authPassword: { type: "password" },
+      authToken: { type: "password" }
     },
     inputs: 1,
     outputs: 1,

@@ -54,36 +54,32 @@ module.exports = function (RED) {
     const getObjectStore = async () => {
       if (objectStore) return objectStore;
 
-      try {
-        if (node.bucketConfig) {
-          objectStore = await node.bucketConfig.getObjectStore();
-          return objectStore;
-        }
-
-        const nc = await node.serverConfig.getConnection();
-        const createOptions = {
-          description: node.description || undefined,
-          max_bytes: node.maxBytes || undefined,
-          ttl: node.maxAge ? nanos(node.maxAge * 1000) : undefined,
-          storage: node.storage === 'memory' ? 'memory' : 'file',
-          replicas: node.replicas,
-          compression: node.compression,
-        };
-
-        Object.keys(createOptions).forEach(key => {
-          if (createOptions[key] === undefined) delete createOptions[key];
-        });
-
-        objectStore = await new Objm(nc).create(node.bucket, createOptions);
+      if (node.bucketConfig) {
+        objectStore = await node.bucketConfig.getObjectStore();
         return objectStore;
-      } catch (err) {
-        node.error(`Failed to get Object Store: ${err.message}`);
-        throw err;
       }
+
+      const nc = await node.serverConfig.getConnection();
+      const createOptions = {
+        description: node.description || undefined,
+        max_bytes: node.maxBytes || undefined,
+        ttl: node.maxAge ? nanos(node.maxAge * 1000) : undefined,
+        storage: node.storage === 'memory' ? 'memory' : 'file',
+        replicas: node.replicas,
+        compression: node.compression,
+      };
+
+      Object.keys(createOptions).forEach(key => {
+        if (createOptions[key] === undefined) delete createOptions[key];
+      });
+
+      objectStore = await new Objm(nc).create(node.bucket, createOptions);
+      return objectStore;
     };
 
-    // Bucket Management Operations
-    const performBucketOperation = async msg => {
+    // Bucket Management Operations. Returns null on success, or the error
+    // to report via done(err) - the caller sends msg itself in both cases.
+    const performBucketOperation = async (msg, send) => {
       try {
         const nc = await node.serverConfig.getConnection();
         const objm = new Objm(nc);
@@ -92,8 +88,7 @@ module.exports = function (RED) {
         const bucketName = msg.bucket || node.bucket || '';
 
         if (!bucketName && operation !== 'bucket-list') {
-          node.error('Bucket name required for operation');
-          return;
+          return new Error('Bucket name required for operation');
         }
 
         switch (operation) {
@@ -194,16 +189,16 @@ module.exports = function (RED) {
           }
 
           default:
-            node.error(`Unknown bucket operation: ${operation}`);
-            return;
+            return new Error(`Unknown bucket operation: ${operation}`);
         }
 
-        node.send(msg);
+        send(msg);
+        return null;
       } catch (err) {
-        node.error(`Bucket operation failed: ${err.message}`, msg);
         msg.error = err.message;
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        return err;
       }
     };
 
@@ -213,7 +208,7 @@ module.exports = function (RED) {
     node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
 
     // Input handler
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Check if this is a bucket management operation
         const operation = msg.operation || config.operation || 'put';
@@ -226,7 +221,7 @@ module.exports = function (RED) {
             'bucket-list',
           ].includes(operation)
         ) {
-          await performBucketOperation(msg);
+          done(await performBucketOperation(msg, send));
           return;
         }
 
@@ -243,8 +238,8 @@ module.exports = function (RED) {
           }
 
           if (!objectName) {
-            node.error('No object name specified', msg);
             node.status({ fill: 'red', shape: 'ring', text: 'no name' });
+            done(new Error('No object name specified'));
             return;
           }
 
@@ -260,12 +255,13 @@ module.exports = function (RED) {
           msg.bucket = node.bucket;
           msg.success = true;
 
-          node.send(msg);
+          send(msg);
           node.status({
             fill: 'green',
             shape: 'dot',
             text: `deleted: ${objectName}`,
           });
+          done();
           return;
         }
 
@@ -281,8 +277,8 @@ module.exports = function (RED) {
         }
 
         if (!objectName) {
-          node.error('No object name specified', msg);
           node.status({ fill: 'red', shape: 'ring', text: 'no name' });
+          done(new Error('No object name specified'));
           return;
         }
 
@@ -300,14 +296,14 @@ module.exports = function (RED) {
           const fs = require('fs');
           const filePath = msg.filePath || config.filePath;
           if (!filePath) {
-            node.error('No file path specified', msg);
+            done(new Error('No file path specified'));
             return;
           }
           data = fs.readFileSync(filePath);
         }
 
         if (!data) {
-          node.error('No data specified', msg);
+          done(new Error('No data specified'));
           return;
         }
 
@@ -370,24 +366,26 @@ module.exports = function (RED) {
         msg.size = info.size;
         msg.chunks = info.chunks;
 
-        node.send(msg);
+        send(msg);
         node.status({
           fill: 'green',
           shape: 'dot',
           text: `put: ${objectName}`,
         });
+        done();
       } catch (err) {
-        node.error(`Object Store PUT failed: ${err.message}`, msg);
         msg.error = err.message;
         msg.operation = 'PUT';
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 
     // Cleanup
-    node.on('close', function () {
+    node.on('close', function (done) {
       this.serverConfig.unregisterConnectionUser(node.id);
+      done();
     });
   }
 

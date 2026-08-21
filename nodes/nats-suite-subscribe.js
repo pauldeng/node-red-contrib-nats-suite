@@ -516,7 +516,7 @@ module.exports = function (RED) {
     }
 
     // Input handler for dynamic subscription changes
-    node.on('input', async msg => {
+    node.on('input', async (msg, send, done) => {
       try {
         // Only process dynamic subscription changes if mode is set to dynamic
         if (subscriptionMode !== 'dynamic') {
@@ -527,6 +527,7 @@ module.exports = function (RED) {
           }
           // In static mode, ignore input messages for subscription changes
           // Input messages are not used for subscription management
+          done();
           return;
         }
 
@@ -568,6 +569,7 @@ module.exports = function (RED) {
                   `[[NATS-SUITE SUBSCRIBE] NATS connection not ready for subscription update`
                 );
               }
+              done();
               return;
             }
 
@@ -583,6 +585,10 @@ module.exports = function (RED) {
             }
             await setupSubscription(newSubject, dynamicQueueGroup);
           } catch (err) {
+            // Deliberately non-fatal: setupSubscription() is retried on the
+            // next input or reconnect, so this input message still counts as
+            // handled - done(err) here would fire every Catch node for a
+            // transient, self-recovering condition the code already logs.
             node.warn(
               `Cannot update subscription: ${err.message}. Will retry when connected.`
             );
@@ -592,6 +598,7 @@ module.exports = function (RED) {
               );
             }
           }
+          done();
         } else {
           // No dynamic properties provided - reset to base subject if in dynamic mode
           if (currentSubject !== baseSubject) {
@@ -614,17 +621,16 @@ module.exports = function (RED) {
               }
             }
           }
+          done();
         }
       } catch (err) {
-        const cleanError = {
-          message: err.message || 'Error handling input message',
-          code: err.code || 'INPUT_ERROR',
-          name: err.name || 'Error',
-        };
+        // Genuinely unexpected - every anticipated failure above was already
+        // logged and swallowed on purpose; escalate this one via done(err)
+        // instead of node.error(), which would double-fire Catch nodes.
         if (isDebug) {
           node.log(`[[NATS-SUITE SUBSCRIBE] Input handler error: ${err.stack}`);
         }
-        node.error(cleanError);
+        done(err);
       }
     });
 

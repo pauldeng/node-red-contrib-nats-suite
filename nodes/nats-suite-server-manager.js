@@ -21,7 +21,10 @@ module.exports = function (RED) {
     this.storeDir = config.storeDir || path.join(os.tmpdir(), 'nats-jetstream');
     this.leafRemoteUrl = config.leafRemoteUrl || '';
     this.leafRemoteUser = config.leafRemoteUser || '';
-    this.leafRemotePass = config.leafRemotePass || '';
+    // Credentials store (encrypted), not plain defaults - see credentials
+    // block in server-manager.html. Breaking change in v1.0.0: existing
+    // plaintext values from flows.json do not carry over.
+    this.leafRemotePass = this.credentials.leafRemotePass || '';
     this.autoStart = config.autoStart !== false;
     this.debug = config.debug || false;
 
@@ -51,8 +54,8 @@ module.exports = function (RED) {
     // Authentication options
     this.enableAuth = config.enableAuth || false;
     this.authUser = config.authUser || '';
-    this.authPassword = config.authPassword || '';
-    this.authToken = config.authToken || '';
+    this.authPassword = this.credentials.authPassword || '';
+    this.authToken = this.credentials.authToken || '';
 
     // New embedded server options
     this.serverName = config.serverName || '';
@@ -837,59 +840,68 @@ module.exports = function (RED) {
     };
 
     // Input handler
-    node.on('input', async msg => {
-      const command = msg.command || msg.payload?.command || msg.topic;
+    node.on('input', async (msg, send, done) => {
+      try {
+        const command = msg.command || msg.payload?.command || msg.topic;
 
-      if (!command) {
-        node.warn(
-          'No command specified. Use msg.command or msg.topic with: start, stop, restart, status, toggle'
-        );
-        return;
-      }
-
-      switch (command) {
-        case 'start':
-          if (natsServerProcess) {
-            node.warn('Server is already running');
-            return;
-          }
-          await startServer();
-          break;
-        case 'stop':
-          if (!natsServerProcess) {
-            node.warn('Server is not running');
-            return;
-          }
-          await stopServer();
-          break;
-        case 'restart':
-          await stopServer();
-          setTimeout(() => startServer(), 1000);
-          break;
-        case 'status':
-          node.send({
-            topic: 'server.status',
-            payload: {
-              running: !!natsServerProcess,
-              type: 'embedded', // Always embedded now
-              port: serverPort,
-              url: serverPort ? `nats://localhost:${serverPort}` : null,
-              version: natsServerVersion, // Add NATS server version here
-            },
-          });
-          break;
-        case 'toggle':
-          if (natsServerProcess) {
-            await stopServer();
-          } else {
-            await startServer();
-          }
-          break;
-        default:
+        if (!command) {
           node.warn(
-            `Unknown command: "${command}". Valid commands: start, stop, restart, status, toggle`
+            'No command specified. Use msg.command or msg.topic with: start, stop, restart, status, toggle'
           );
-          break;
+          done();
+          return;
+        }
+
+        switch (command) {
+          case 'start':
+            if (natsServerProcess) {
+              node.warn('Server is already running');
+              break;
+            }
+            // startServer() catches and reports its own errors (it also
+            // runs unattended from auto-start, not just this handler) and
+            // never rejects.
+            await startServer();
+            break;
+          case 'stop':
+            if (!natsServerProcess) {
+              node.warn('Server is not running');
+              break;
+            }
+            await stopServer();
+            break;
+          case 'restart':
+            await stopServer();
+            setTimeout(() => startServer(), 1000);
+            break;
+          case 'status':
+            node.send({
+              topic: 'server.status',
+              payload: {
+                running: !!natsServerProcess,
+                type: 'embedded', // Always embedded now
+                port: serverPort,
+                url: serverPort ? `nats://localhost:${serverPort}` : null,
+                version: natsServerVersion, // Add NATS server version here
+              },
+            });
+            break;
+          case 'toggle':
+            if (natsServerProcess) {
+              await stopServer();
+            } else {
+              await startServer();
+            }
+            break;
+          default:
+            node.warn(
+              `Unknown command: "${command}". Valid commands: start, stop, restart, status, toggle`
+            );
+            break;
+        }
+        done();
+      } catch (err) {
+        done(err);
       }
     });
 
@@ -907,11 +919,21 @@ module.exports = function (RED) {
       setStatus('stopped');
     }
 
-    // Cleanup on close
-    node.on('close', async () => {
+    // Cleanup on close. Must take `done` - Node-RED dispatches close handlers
+    // by declared arity (callback.length), so a zero-arg async function is
+    // never awaited even though it looks correct; a redeploy could then start
+    // a new instance before the old nats-server child process actually exits.
+    node.on('close', async done => {
       await stopServer();
+      done();
     });
   }
 
-  RED.nodes.registerType('nats-suite-server-manager', NatsServerManagerNode);
+  RED.nodes.registerType('nats-suite-server-manager', NatsServerManagerNode, {
+    credentials: {
+      leafRemotePass: { type: 'password' },
+      authPassword: { type: 'password' },
+      authToken: { type: 'password' },
+    },
+  });
 };

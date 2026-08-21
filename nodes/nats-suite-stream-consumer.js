@@ -393,6 +393,9 @@ module.exports = function (RED) {
     });
 
     // Stream Management Operations
+    // Returns null on success, or the error to report via done(err) -
+    // node.error() itself is the caller's job now, so one failure doesn't
+    // fire Catch nodes twice.
     const performStreamOperation = async msg => {
       try {
         await ensureJetStream();
@@ -401,8 +404,7 @@ module.exports = function (RED) {
         const streamName = msg.stream || config.streamName || '';
 
         if (!streamName) {
-          node.error('Stream name required for operation');
-          return;
+          return new Error('Stream name required for operation');
         }
 
         switch (operation) {
@@ -444,20 +446,21 @@ module.exports = function (RED) {
           }
 
           default:
-            node.error(`Unknown operation: ${operation}`);
-            return;
+            return new Error(`Unknown operation: ${operation}`);
         }
 
         node.send(msg);
+        return null;
       } catch (err) {
-        node.error(`Stream operation failed: ${err.message}`, msg);
         msg.error = err.message;
         node.send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        return err;
       }
     };
 
-    // Consumer Management Operations
+    // Consumer Management Operations. Same return contract as
+    // performStreamOperation above.
     const performConsumerOperation = async msg => {
       try {
         await ensureJetStream();
@@ -467,13 +470,11 @@ module.exports = function (RED) {
         const consumerName = msg.consumer || config.consumerName || '';
 
         if (!streamName && operation !== 'list') {
-          node.error('Stream name required for consumer operation');
-          return;
+          return new Error('Stream name required for consumer operation');
         }
 
         if (!consumerName && operation !== 'list' && operation !== 'create') {
-          node.error('Consumer name required for operation');
-          return;
+          return new Error('Consumer name required for operation');
         }
 
         switch (operation) {
@@ -651,28 +652,28 @@ module.exports = function (RED) {
           }
 
           default:
-            node.error(`Unknown consumer operation: ${operation}`);
-            return;
+            return new Error(`Unknown consumer operation: ${operation}`);
         }
 
         node.send(msg);
+        return null;
       } catch (err) {
-        node.error(`Consumer operation failed: ${err.message}`, msg);
         msg.error = err.message;
         node.send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        return err;
       }
     };
 
     // Input handler - trigger message consumption, stream management, or consumer management
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Check if this is a stream management or consumer management operation
         const operation = msg.operation || config.operation || 'consume';
 
         // Stream management operations
         if (operation === 'purge') {
-          await performStreamOperation(msg);
+          done(await performStreamOperation(msg));
           return;
         }
 
@@ -689,13 +690,13 @@ module.exports = function (RED) {
             'monitor',
           ].includes(operation)
         ) {
-          await performConsumerOperation(msg);
+          done(await performConsumerOperation(msg));
           return;
         }
 
         // Default: consume messages
         if (operation !== 'consume') {
-          node.error(`Unknown operation: ${operation}`);
+          done(new Error(`Unknown operation: ${operation}`));
           return;
         }
 
@@ -703,16 +704,19 @@ module.exports = function (RED) {
         if (!consumer) {
           const ready = await ensureConsumer();
           if (!ready) {
-            node.error('Consumer not ready', msg);
+            done(new Error('Consumer not ready'));
             return;
           }
         }
 
-        // Consume messages
+        // Consume messages. consumeMessages() reports its own failures via
+        // node.error() (it also runs unattended from a future poll, not
+        // just this handler) and never rejects, so this always completes.
         await consumeMessages(msg);
+        done();
       } catch (err) {
-        node.error(`Consumer error: ${err.message}`, msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 

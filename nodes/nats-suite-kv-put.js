@@ -31,28 +31,23 @@ module.exports = function (RED) {
     const getKVBucket = async () => {
       if (kvStore) return kvStore;
 
-      try {
-        const nc = await node.serverConfig.getConnection();
-        const createOptions = {
-          history: node.history,
-          ttl: node.maxAge * 1000,
-          max_bytes: node.maxBytes || undefined,
-          maxValueSize: node.maxValueSize || undefined,
-          compression: node.compression,
-          replicas: node.replicas,
-          storage: node.storage === 'memory' ? 'memory' : 'file',
-        };
+      const nc = await node.serverConfig.getConnection();
+      const createOptions = {
+        history: node.history,
+        ttl: node.maxAge * 1000,
+        max_bytes: node.maxBytes || undefined,
+        maxValueSize: node.maxValueSize || undefined,
+        compression: node.compression,
+        replicas: node.replicas,
+        storage: node.storage === 'memory' ? 'memory' : 'file',
+      };
 
-        Object.keys(createOptions).forEach(key => {
-          if (createOptions[key] === undefined) delete createOptions[key];
-        });
+      Object.keys(createOptions).forEach(key => {
+        if (createOptions[key] === undefined) delete createOptions[key];
+      });
 
-        kvStore = await new Kvm(nc).create(node.bucket, createOptions);
-        return kvStore;
-      } catch (err) {
-        node.error(`Failed to get KV bucket: ${err.message}`);
-        throw err;
-      }
+      kvStore = await new Kvm(nc).create(node.bucket, createOptions);
+      return kvStore;
     };
 
     // Helper: Stringify value if needed
@@ -63,8 +58,9 @@ module.exports = function (RED) {
       return String(value);
     };
 
-    // Bucket Management Operations
-    const performBucketOperation = async msg => {
+    // Bucket Management Operations. Returns null on success, or the error
+    // to report via done(err) - the caller sends msg itself in both cases.
+    const performBucketOperation = async (msg, send) => {
       try {
         const nc = await node.serverConfig.getConnection();
         const kvm = new Kvm(nc);
@@ -73,8 +69,7 @@ module.exports = function (RED) {
         const bucketName = msg.bucket || node.bucket || '';
 
         if (!bucketName && operation !== 'bucket-list') {
-          node.error('Bucket name required for operation');
-          return;
+          return new Error('Bucket name required for operation');
         }
 
         switch (operation) {
@@ -173,16 +168,16 @@ module.exports = function (RED) {
           }
 
           default:
-            node.error(`Unknown bucket operation: ${operation}`);
-            return;
+            return new Error(`Unknown bucket operation: ${operation}`);
         }
 
-        node.send(msg);
+        send(msg);
+        return null;
       } catch (err) {
-        node.error(`Bucket operation failed: ${err.message}`, msg);
         msg.error = err.message;
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        return err;
       }
     };
 
@@ -192,7 +187,7 @@ module.exports = function (RED) {
     node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
 
     // Input handler
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Check if this is a bucket management operation
         const operation = msg.operation || config.operation || 'put';
@@ -205,7 +200,7 @@ module.exports = function (RED) {
             'bucket-list',
           ].includes(operation)
         ) {
-          await performBucketOperation(msg);
+          done(await performBucketOperation(msg, send));
           return;
         }
 
@@ -220,8 +215,8 @@ module.exports = function (RED) {
         }
 
         if (!key) {
-          node.error('No key specified', msg);
           node.status({ fill: 'red', shape: 'ring', text: 'no key' });
+          done(new Error('No key specified'));
           return;
         }
 
@@ -249,7 +244,7 @@ module.exports = function (RED) {
             }
 
             if (value === undefined || value === null) {
-              node.error('No value specified', msg);
+              done(new Error('No value specified'));
               return;
             }
 
@@ -270,7 +265,7 @@ module.exports = function (RED) {
             msg.key = key;
             msg.bucket = node.bucket;
 
-            node.send(msg);
+            send(msg);
             node.status({ fill: 'green', shape: 'dot', text: `put: ${key}` });
             break;
           }
@@ -287,7 +282,7 @@ module.exports = function (RED) {
             }
 
             if (value === undefined || value === null) {
-              node.error('No value specified', msg);
+              done(new Error('No value specified'));
               return;
             }
 
@@ -310,7 +305,7 @@ module.exports = function (RED) {
               msg.bucket = node.bucket;
               msg._created = true;
 
-              node.send(msg);
+              send(msg);
               node.status({
                 fill: 'green',
                 shape: 'dot',
@@ -324,15 +319,15 @@ module.exports = function (RED) {
                   JetStreamApiCodes.StreamWrongLastSequenceUnknown,
                 ].includes(err.code)
               ) {
-                node.error(`Key already exists: ${key}`, msg);
                 node.status({
                   fill: 'red',
                   shape: 'ring',
                   text: 'already exists',
                 });
-              } else {
-                throw err;
+                done(new Error(`Key already exists: ${key}`));
+                return;
               }
+              throw err;
             }
             break;
           }
@@ -349,7 +344,7 @@ module.exports = function (RED) {
             }
 
             if (value === undefined || value === null) {
-              node.error('No value specified', msg);
+              done(new Error('No value specified'));
               return;
             }
 
@@ -358,8 +353,8 @@ module.exports = function (RED) {
             // Get current revision first
             const current = await kv.get(key);
             if (!current) {
-              node.error(`Key does not exist: ${key}`, msg);
               node.status({ fill: 'red', shape: 'ring', text: 'not found' });
+              done(new Error(`Key does not exist: ${key}`));
               return;
             }
 
@@ -383,7 +378,7 @@ module.exports = function (RED) {
             msg.bucket = node.bucket;
             msg._updated = true;
 
-            node.send(msg);
+            send(msg);
             node.status({
               fill: 'green',
               shape: 'dot',
@@ -405,7 +400,7 @@ module.exports = function (RED) {
             msg.bucket = node.bucket;
             msg._deleted = true;
 
-            node.send(msg);
+            send(msg);
             node.status({
               fill: 'blue',
               shape: 'dot',
@@ -427,13 +422,13 @@ module.exports = function (RED) {
             msg.bucket = node.bucket;
             msg._purged = true;
 
-            node.send(msg);
+            send(msg);
             node.status({ fill: 'blue', shape: 'dot', text: `purged: ${key}` });
             break;
           }
 
           default:
-            node.error(`Unknown operation: ${op}`, msg);
+            done(new Error(`Unknown operation: ${op}`));
             return;
         }
 
@@ -441,17 +436,19 @@ module.exports = function (RED) {
         setTimeout(() => {
           node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
         }, 1000);
+        done();
       } catch (err) {
-        node.error(`KV PUT error: ${err.message}`, msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 
     // Cleanup on close
-    node.on('close', function () {
+    node.on('close', function (done) {
       this.serverConfig.unregisterConnectionUser(node.id);
       kvStore = null;
       node.status({});
+      done();
     });
   }
 

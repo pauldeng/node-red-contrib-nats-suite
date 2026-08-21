@@ -32,28 +32,23 @@ module.exports = function (RED) {
     const getKVBucket = async () => {
       if (kvStore) return kvStore;
 
-      try {
-        const nc = await node.serverConfig.getConnection();
-        const createOptions = {
-          history: node.history,
-          ttl: node.maxAge * 1000,
-          max_bytes: node.maxBytes || undefined,
-          maxValueSize: node.maxValueSize || undefined,
-          compression: node.compression,
-          replicas: node.replicas,
-          storage: node.storage === 'memory' ? 'memory' : 'file',
-        };
+      const nc = await node.serverConfig.getConnection();
+      const createOptions = {
+        history: node.history,
+        ttl: node.maxAge * 1000,
+        max_bytes: node.maxBytes || undefined,
+        maxValueSize: node.maxValueSize || undefined,
+        compression: node.compression,
+        replicas: node.replicas,
+        storage: node.storage === 'memory' ? 'memory' : 'file',
+      };
 
-        Object.keys(createOptions).forEach(key => {
-          if (createOptions[key] === undefined) delete createOptions[key];
-        });
+      Object.keys(createOptions).forEach(key => {
+        if (createOptions[key] === undefined) delete createOptions[key];
+      });
 
-        kvStore = await new Kvm(nc).create(node.bucket, createOptions);
-        return kvStore;
-      } catch (err) {
-        node.error(`Failed to get KV bucket: ${err.message}`);
-        throw err;
-      }
+      kvStore = await new Kvm(nc).create(node.bucket, createOptions);
+      return kvStore;
     };
 
     // Helper: Parse value if JSON
@@ -259,7 +254,7 @@ module.exports = function (RED) {
     }
 
     // Input handler
-    node.on('input', async function (msg) {
+    node.on('input', async function (msg, send, done) {
       try {
         // Determine operation mode - msg.operation takes precedence
         const mode = msg.operation || config.mode;
@@ -278,7 +273,7 @@ module.exports = function (RED) {
           }
 
           if (!key) {
-            node.error('No key specified', msg);
+            done(new Error('No key specified'));
             return;
           }
 
@@ -299,7 +294,7 @@ module.exports = function (RED) {
             msg.operation = 'GET';
             msg._notFound = true;
             msg.bucket = node.bucket;
-            node.send(msg);
+            send(msg);
             node.status({ fill: 'grey', shape: 'ring', text: 'not found' });
           } else {
             if (isDebug) {
@@ -309,7 +304,7 @@ module.exports = function (RED) {
             }
             // Merge result into msg
             Object.assign(msg, result);
-            node.send(msg);
+            send(msg);
             node.status({ fill: 'green', shape: 'dot', text: 'retrieved' });
           }
 
@@ -317,6 +312,7 @@ module.exports = function (RED) {
           setTimeout(() => {
             node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
           }, 1000);
+          done();
         } else if (mode === 'keys' || mode === 'list') {
           if (isDebug) {
             node.log(`[KV GET] LIST operation - Bucket: ${node.bucket}`);
@@ -329,7 +325,7 @@ module.exports = function (RED) {
           }
 
           Object.assign(msg, result);
-          node.send(msg);
+          send(msg);
           node.status({
             fill: 'green',
             shape: 'dot',
@@ -339,27 +335,30 @@ module.exports = function (RED) {
           setTimeout(() => {
             node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
           }, 1000);
+          done();
         } else if (mode === 'watch') {
           // Watch mode doesn't use input, but we can trigger a re-watch
           if (!isWatching) {
             await startWatch();
           }
+          done();
         } else {
-          node.error(`Unknown operation: ${mode}`, msg);
+          done(new Error(`Unknown operation: ${mode}`));
           return;
         }
       } catch (err) {
-        node.error(`KV GET error: ${err.message}`, msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        done(err);
       }
     });
 
     // Cleanup on close
-    node.on('close', async function () {
+    node.on('close', async function (done) {
       await stopWatch();
       this.serverConfig.unregisterConnectionUser(node.id);
       kvStore = null;
       node.status({});
+      done();
     });
   }
 
