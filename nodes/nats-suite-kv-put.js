@@ -23,6 +23,7 @@ module.exports = function (RED) {
     this.storage = config.storage || 'file';
 
     let kvStore = null;
+    let statusTimer = null;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
     // Helper: Get or create KV bucket. Kvm#create() is create-or-open (a
@@ -433,7 +434,9 @@ module.exports = function (RED) {
         }
 
         // Reset status after 1 second
-        setTimeout(() => {
+        if (statusTimer) clearTimeout(statusTimer);
+        statusTimer = setTimeout(() => {
+          statusTimer = null;
           node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
         }, 1000);
         done();
@@ -445,6 +448,7 @@ module.exports = function (RED) {
 
     // Cleanup on close
     node.on('close', function (done) {
+      if (statusTimer) clearTimeout(statusTimer);
       this.serverConfig.unregisterConnectionUser(node.id);
       kvStore = null;
       node.status({});

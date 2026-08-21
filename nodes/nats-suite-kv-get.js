@@ -23,7 +23,11 @@ module.exports = function (RED) {
 
     let kvStore = null;
     let watcher = null;
+    let watchTask = null;
+    let watchSetupTask = null;
     let isWatching = false;
+    let statusTimer = null;
+    let closing = false;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
     // Helper: Get or create KV bucket. Kvm#create() is create-or-open (a
@@ -155,89 +159,91 @@ module.exports = function (RED) {
     const startWatch = async () => {
       if (isWatching) return;
 
-      try {
-        const kv = await getKVBucket();
+      const kv = await getKVBucket();
 
-        // Determine watch options
-        const watchOptions = {};
-        if (config.watchPattern) {
-          watchOptions.key = config.watchPattern;
-        }
-
-        if (config.ignoreDeletes) {
-          watchOptions.ignoreDeletes = true;
-        }
-
-        watcher = await kv.watch(watchOptions);
-        isWatching = true;
-
-        node.status({ fill: 'green', shape: 'dot', text: 'watching' });
-        if (isDebug)
-          node.log(`[KV GET] Started watching: ${config.watchPattern || '*'}`);
-
-        // Process watch events
-        (async () => {
-          try {
-            for await (const entry of watcher) {
-              if (!isWatching) break;
-
-              const value = entry.value ? entry.string() : null;
-              const parsedValue = value !== null ? parseValue(value) : null;
-
-              const msg = {
-                payload: parsedValue,
-                key: entry.key,
-                operation: entry.operation,
-                revision: entry.revision,
-                created: entry.created
-                  ? new Date(entry.created).toISOString()
-                  : null,
-                bucket: node.bucket,
-                _watchEvent: true,
-              };
-
-              node.send(msg);
-
-              node.status({
-                fill: 'blue',
-                shape: 'dot',
-                text: `${entry.operation}: ${entry.key}`,
-              });
-
-              // Reset status after 1 second
-              setTimeout(() => {
-                if (isWatching) {
-                  node.status({
-                    fill: 'green',
-                    shape: 'dot',
-                    text: 'watching',
-                  });
-                }
-              }, 1000);
-            }
-          } catch (err) {
-            if (isWatching) {
-              node.error(`Watch error: ${err.message}`);
-              node.status({ fill: 'red', shape: 'ring', text: 'watch error' });
-            }
-          }
-        })();
-      } catch (err) {
-        node.error(`Failed to start watch: ${err.message}`);
-        node.status({ fill: 'red', shape: 'ring', text: 'watch failed' });
+      // Determine watch options
+      const watchOptions = {};
+      if (config.watchPattern) {
+        watchOptions.key = config.watchPattern;
       }
+
+      if (config.ignoreDeletes) {
+        watchOptions.ignoreDeletes = true;
+      }
+
+      watcher = await kv.watch(watchOptions);
+      if (closing) {
+        await watcher.stop();
+        watcher = null;
+        return;
+      }
+      const activeWatcher = watcher;
+      isWatching = true;
+
+      node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+      if (isDebug)
+        node.log(`[KV GET] Started watching: ${config.watchPattern || '*'}`);
+
+      // Process watch events
+      const consumeWatch = async () => {
+        try {
+          for await (const entry of activeWatcher) {
+            if (!isWatching) break;
+
+            const value = entry.value ? entry.string() : null;
+            const parsedValue = value !== null ? parseValue(value) : null;
+
+            const msg = {
+              payload: parsedValue,
+              key: entry.key,
+              operation: entry.operation,
+              revision: entry.revision,
+              created: entry.created
+                ? new Date(entry.created).toISOString()
+                : null,
+              bucket: node.bucket,
+              _watchEvent: true,
+            };
+
+            node.send(msg);
+
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `${entry.operation}: ${entry.key}`,
+            });
+
+            // Reset status after 1 second
+            if (statusTimer) clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => {
+              statusTimer = null;
+              if (isWatching) {
+                node.status({
+                  fill: 'green',
+                  shape: 'dot',
+                  text: 'watching',
+                });
+              }
+            }, 1000);
+          }
+        } catch (err) {
+          if (isWatching) {
+            node.error(`Watch error: ${err.message}`);
+            node.status({ fill: 'red', shape: 'ring', text: 'watch error' });
+          }
+        }
+      };
+      watchTask = consumeWatch();
     };
 
     // Helper: Stop watching
     const stopWatch = async () => {
       if (watcher) {
-        try {
-          await watcher.stop();
-          if (isDebug) node.log(`[KV GET] Stopped watching`);
-        } catch (err) {
-          node.warn(`Error stopping watch: ${err.message}`);
-        }
+        await watcher.stop();
+        await watchTask;
+        if (isDebug) node.log(`[KV GET] Stopped watching`);
         watcher = null;
+        watchTask = null;
       }
       isWatching = false;
     };
@@ -248,7 +254,15 @@ module.exports = function (RED) {
     // Initialize based on mode
     if (config.mode === 'watch') {
       // Start watching immediately
-      startWatch();
+      const initializeWatch = async () => {
+        try {
+          await startWatch();
+        } catch (err) {
+          node.error(`Failed to start watch: ${err.message}`);
+          node.status({ fill: 'red', shape: 'ring', text: 'watch failed' });
+        }
+      };
+      watchSetupTask = initializeWatch();
     } else {
       node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
     }
@@ -309,7 +323,9 @@ module.exports = function (RED) {
           }
 
           // Reset status
-          setTimeout(() => {
+          if (statusTimer) clearTimeout(statusTimer);
+          statusTimer = setTimeout(() => {
+            statusTimer = null;
             node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
           }, 1000);
           done();
@@ -332,7 +348,9 @@ module.exports = function (RED) {
             text: `${result.count} keys`,
           });
 
-          setTimeout(() => {
+          if (statusTimer) clearTimeout(statusTimer);
+          statusTimer = setTimeout(() => {
+            statusTimer = null;
             node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
           }, 1000);
           done();
@@ -354,11 +372,20 @@ module.exports = function (RED) {
 
     // Cleanup on close
     node.on('close', async function (done) {
-      await stopWatch();
-      this.serverConfig.unregisterConnectionUser(node.id);
-      kvStore = null;
-      node.status({});
-      done();
+      let closeError;
+      try {
+        closing = true;
+        if (statusTimer) clearTimeout(statusTimer);
+        if (watchSetupTask) await watchSetupTask;
+        await stopWatch();
+      } catch (err) {
+        closeError = err;
+      } finally {
+        this.serverConfig.unregisterConnectionUser(node.id);
+        kvStore = null;
+        node.status({});
+        done(closeError);
+      }
     });
   }
 

@@ -154,7 +154,6 @@ module.exports = function (RED) {
         }
       } catch (err) {
         streamReady = false;
-        node.error(`Failed to ensure stream: ${err.message}`);
 
         // Show error status for 2 seconds
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
@@ -162,7 +161,7 @@ module.exports = function (RED) {
         // Revert to connection status after 2 seconds
         scheduleStatusRevert();
 
-        return false;
+        throw err;
       }
     };
 
@@ -172,7 +171,14 @@ module.exports = function (RED) {
     // Initialize stream only for publish operation when createOnInit is enabled
     const operation = config.operation || 'publish';
     if (operation === 'publish' && config.createOnInit !== false) {
-      ensureStream();
+      const initializeStream = async () => {
+        try {
+          await ensureStream();
+        } catch (err) {
+          node.error(`Failed to ensure stream: ${err.message}`);
+        }
+      };
+      initializeStream();
     }
 
     // Status listener for connection changes (status painting only; the
@@ -185,7 +191,7 @@ module.exports = function (RED) {
     // Stream Management Operations. Returns null on success, or the error to
     // report via done(err) - node.error() itself is now the caller's job
     // (on('input')), so a single failure doesn't fire Catch nodes twice.
-    const performStreamOperation = async msg => {
+    const performStreamOperation = async (msg, send) => {
       try {
         await ensureJetStream();
 
@@ -606,7 +612,7 @@ module.exports = function (RED) {
             return new Error(`Unknown operation: ${operation}`);
         }
 
-        node.send(msg);
+        send(msg);
         return null;
       } catch (err) {
         msg.error = err.message;
@@ -617,7 +623,7 @@ module.exports = function (RED) {
         // Revert to connection status after 2 seconds
         scheduleStatusRevert();
 
-        node.send(msg);
+        send(msg);
         return err;
       }
     };
@@ -629,17 +635,13 @@ module.exports = function (RED) {
         const operation = msg.operation || config.operation || 'publish';
 
         if (operation !== 'publish') {
-          done(await performStreamOperation(msg));
+          done(await performStreamOperation(msg, send));
           return;
         }
 
         // Ensure we have a JetStream client
         if (!streamReady) {
-          const ready = await ensureStream();
-          if (!ready) {
-            done(new Error('Stream not ready'));
-            return;
-          }
+          await ensureStream();
         }
 
         // Determine subject
@@ -685,14 +687,14 @@ module.exports = function (RED) {
         msg._duplicate = pubAck.duplicate || false;
 
         // Send message to output
-        node.send(msg);
+        send(msg);
         done();
       } catch (err) {
         msg.published = false;
         msg.error = err.message;
 
         // Send error message to output
-        node.send(msg);
+        send(msg);
         done(err);
       }
     });

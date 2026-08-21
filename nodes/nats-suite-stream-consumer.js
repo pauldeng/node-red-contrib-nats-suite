@@ -38,6 +38,9 @@ module.exports = function (RED) {
     let isConsuming = false;
     let isPaused = false; // Pause state
     let idleTimeout = null; // Timer for idle status
+    let fetchTask = null;
+    let activeMessages = null;
+    let closing = false;
 
     const setGreenStatus = (text, shape = 'dot') => {
       if (node.serverConfig.connectionStatus !== 'connected') return false;
@@ -79,13 +82,14 @@ module.exports = function (RED) {
             err instanceof JetStreamApiError &&
             err.code === JetStreamApiCodes.StreamNotFound
           ) {
-            node.error(`Stream not found: ${config.streamName}`);
             node.status({
               fill: 'red',
               shape: 'ring',
               text: 'stream not found',
             });
-            return false;
+            throw new Error(`Stream not found: ${config.streamName}`, {
+              cause: err,
+            });
           }
           throw err;
         }
@@ -154,15 +158,15 @@ module.exports = function (RED) {
               );
             } else {
               // createOnInit is disabled, consumer must exist
-              node.error(
-                `Consumer not found: ${config.consumerName}. Enable "Create Consumer on initialization" or create the consumer manually.`
-              );
               node.status({
                 fill: 'red',
                 shape: 'ring',
                 text: 'consumer not found',
               });
-              return false;
+              throw new Error(
+                `Consumer not found: ${config.consumerName}. Enable "Create Consumer on initialization" or create the consumer manually.`,
+                { cause: err }
+              );
             }
           } else {
             throw err;
@@ -172,14 +176,13 @@ module.exports = function (RED) {
         setGreenStatus(`${config.consumerName} (ready)`);
         return true;
       } catch (err) {
-        node.error(`Failed to ensure consumer: ${err.message}`);
         node.status({ fill: 'red', shape: 'ring', text: 'consumer error' });
-        return false;
+        throw err;
       }
     };
 
     // Helper: Process a single message
-    const processMessage = async (msg, jetMsg) => {
+    const processMessage = async (send, jetMsg) => {
       try {
         // Decode payload
         const data = jetMsg.string();
@@ -201,18 +204,10 @@ module.exports = function (RED) {
               `[STREAM CONSUMER] JSON parsing failed: ${parseError.message}`
             );
           }
-          node.error(
-            {
-              message: 'JSON parsing failed',
-              code: 'JSON_PARSE_ERROR',
-              originalError: parseError.message,
-            },
-            {
-              topic: jetMsg.subject,
-              rawData: data,
-            }
-          );
-          return; // Stop processing on error
+          const err = new Error('JSON parsing failed', { cause: parseError });
+          err.code = 'JSON_PARSE_ERROR';
+          err.rawData = data;
+          throw err;
         }
 
         // Build output message
@@ -290,7 +285,7 @@ module.exports = function (RED) {
             `[STREAM CONSUMER] Sending output message for seq ${jetMsg.seq}`
           );
         }
-        node.send(outMsg);
+        send(outMsg);
 
         // Update status
         const pending = toNumber(jetMsg.info.pending) || 0;
@@ -308,18 +303,19 @@ module.exports = function (RED) {
 
         // Set timeout to change to idle status after 2 seconds
         idleTimeout = setTimeout(() => {
-          if (!isConsuming && !isPaused)
+          if (!closing && !isConsuming && !isPaused)
             setGreenStatus(`${config.consumerName} (idle)`, 'ring');
           idleTimeout = null;
         }, 2000);
       } catch (err) {
-        node.error(`Error processing message: ${err.message}`, msg);
+        node.status({ fill: 'red', shape: 'ring', text: 'message error' });
+        throw err;
       }
     };
 
     // Helper: Consume messages
-    const consumeMessages = async msg => {
-      if (!consumer || isConsuming || isPaused) return;
+    const consumeMessages = async (msg, send) => {
+      if (!consumer || isConsuming || isPaused || closing) return;
 
       try {
         isConsuming = true;
@@ -344,20 +340,24 @@ module.exports = function (RED) {
         );
 
         // Fetch messages
-        const messages = await consumer.fetch({
+        fetchTask = consumer.fetch({
           ...msg.options,
           max_messages: batch,
           expires: maxWait,
         });
+        const messages = await fetchTask;
+        fetchTask = null;
+        activeMessages = messages;
+        if (closing) messages.stop();
 
         let count = 0;
-        for await (const msg of messages) {
+        for await (const jetMsg of messages) {
           // Check if paused during iteration
-          if (isPaused) {
+          if (isPaused || closing) {
             node.log(`[STREAM CONSUMER] Paused during consumption`);
             break;
           }
-          await processMessage({}, msg);
+          await processMessage(send, jetMsg);
           count++;
         }
 
@@ -368,11 +368,14 @@ module.exports = function (RED) {
           setGreenStatus(`${config.consumerName} (idle)`, 'ring');
         }
       } catch (err) {
-        if (err.message && !err.message.includes('timeout')) {
-          node.error(`Consume error: ${err.message}`);
+        if (!closing && (!err.message || !err.message.includes('timeout'))) {
           node.status({ fill: 'red', shape: 'ring', text: 'consume error' });
+          throw err;
         }
       } finally {
+        fetchTask = null;
+        activeMessages?.stop();
+        activeMessages = null;
         isConsuming = false;
       }
     };
@@ -381,7 +384,14 @@ module.exports = function (RED) {
     this.serverConfig.registerConnectionUser(node.id);
 
     // Initialize consumer
-    ensureConsumer();
+    const initializeConsumer = async () => {
+      try {
+        await ensureConsumer();
+      } catch (err) {
+        node.error(`Failed to ensure consumer: ${err.message}`);
+      }
+    };
+    initializeConsumer();
 
     // Status listener for connection changes (status painting only; the
     // consumer is established once at node start and its handle stays valid
@@ -396,7 +406,7 @@ module.exports = function (RED) {
     // Returns null on success, or the error to report via done(err) -
     // node.error() itself is the caller's job now, so one failure doesn't
     // fire Catch nodes twice.
-    const performStreamOperation = async msg => {
+    const performStreamOperation = async (msg, send) => {
       try {
         await ensureJetStream();
 
@@ -449,11 +459,11 @@ module.exports = function (RED) {
             return new Error(`Unknown operation: ${operation}`);
         }
 
-        node.send(msg);
+        send(msg);
         return null;
       } catch (err) {
         msg.error = err.message;
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
         return err;
       }
@@ -461,7 +471,7 @@ module.exports = function (RED) {
 
     // Consumer Management Operations. Same return contract as
     // performStreamOperation above.
-    const performConsumerOperation = async msg => {
+    const performConsumerOperation = async (msg, send) => {
       try {
         await ensureJetStream();
 
@@ -655,11 +665,11 @@ module.exports = function (RED) {
             return new Error(`Unknown consumer operation: ${operation}`);
         }
 
-        node.send(msg);
+        send(msg);
         return null;
       } catch (err) {
         msg.error = err.message;
-        node.send(msg);
+        send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
         return err;
       }
@@ -673,7 +683,7 @@ module.exports = function (RED) {
 
         // Stream management operations
         if (operation === 'purge') {
-          done(await performStreamOperation(msg));
+          done(await performStreamOperation(msg, send));
           return;
         }
 
@@ -690,7 +700,7 @@ module.exports = function (RED) {
             'monitor',
           ].includes(operation)
         ) {
-          done(await performConsumerOperation(msg));
+          done(await performConsumerOperation(msg, send));
           return;
         }
 
@@ -702,17 +712,10 @@ module.exports = function (RED) {
 
         // Ensure consumer is ready
         if (!consumer) {
-          const ready = await ensureConsumer();
-          if (!ready) {
-            done(new Error('Consumer not ready'));
-            return;
-          }
+          await ensureConsumer();
         }
 
-        // Consume messages. consumeMessages() reports its own failures via
-        // node.error() (it also runs unattended from a future poll, not
-        // just this handler) and never rejects, so this always completes.
-        await consumeMessages(msg);
+        await consumeMessages(msg, send);
         done();
       } catch (err) {
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
@@ -721,22 +724,27 @@ module.exports = function (RED) {
     });
 
     // Cleanup on close
-    node.on('close', function (done) {
-      detachStatus();
-      this.serverConfig.unregisterConnectionUser(node.id);
-
-      // Clear idle timeout
-      if (idleTimeout) {
-        clearTimeout(idleTimeout);
-        idleTimeout = null;
+    node.on('close', async function (done) {
+      let closeError;
+      try {
+        closing = true;
+        if (idleTimeout) clearTimeout(idleTimeout);
+        const messages = activeMessages || (fetchTask && (await fetchTask));
+        if (messages) {
+          messages.stop();
+          await messages.closed();
+        }
+      } catch (err) {
+        closeError = err;
+      } finally {
+        detachStatus();
+        this.serverConfig.unregisterConnectionUser(node.id);
+        consumer = null;
+        jsClient = null;
+        jsm = null;
+        node.status({});
+        done(closeError);
       }
-
-      // Don't delete the consumer - it's durable and should persist
-      consumer = null;
-      jsClient = null;
-      jsm = null;
-      node.status({});
-      done();
     });
   }
 

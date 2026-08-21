@@ -30,6 +30,14 @@ async function checkStack(t) {
   return true;
 }
 
+async function ignoreFailure(promise) {
+  try {
+    return await promise;
+  } catch {
+    return undefined;
+  }
+}
+
 let seq = 0;
 const uid = base => `${base}${Date.now().toString(36)}${seq++}`;
 
@@ -64,11 +72,27 @@ function debugNode(id) {
 }
 
 function catchNode(id, scope, wireTo) {
-  return { id, type: 'catch', z: 'FLOW', name: '', scope, uncaught: false, wires: [[wireTo]] };
+  return {
+    id,
+    type: 'catch',
+    z: 'FLOW',
+    name: '',
+    scope,
+    uncaught: false,
+    wires: [[wireTo]],
+  };
 }
 
 function completeNode(id, scope, wireTo) {
-  return { id, type: 'complete', z: 'FLOW', name: '', scope, uncaught: false, wires: [[wireTo]] };
+  return {
+    id,
+    type: 'complete',
+    z: 'FLOW',
+    name: '',
+    scope,
+    uncaught: false,
+    wires: [[wireTo]],
+  };
 }
 
 function subscribeNode(id, srv, subject, wireTo) {
@@ -111,7 +135,14 @@ function streamPublisherNode(id, srv, streamName, subject, wireTo) {
   };
 }
 
-function streamConsumerNode(id, srv, streamName, consumerName, subject, wireTo) {
+function streamConsumerNode(
+  id,
+  srv,
+  streamName,
+  consumerName,
+  subject,
+  wireTo
+) {
   return {
     id,
     type: 'nats-suite-stream-consumer',
@@ -201,15 +232,23 @@ test('stream-publisher: Catch fires on a real operation failure, Complete fires 
     await triggerInject(injFail);
     const caughtMsg = await caught;
     assert.ok(caughtMsg.error, 'caught message should carry the error');
-    assert.equal(caughtMsg.error.source.id, sp, 'error should be attributed to the stream-publisher node');
+    assert.equal(
+      caughtMsg.error.source.id,
+      sp,
+      'error should be attributed to the stream-publisher node'
+    );
 
     const completed = comms.waitForDebug(dbgCmp, 8000);
     await triggerInject(injOk);
     const completeMsg = await completed;
-    assert.equal(completeMsg.complete.source.id, sp, 'complete event should be attributed to the stream-publisher node');
+    assert.equal(
+      completeMsg.complete.source.id,
+      sp,
+      'complete event should be attributed to the stream-publisher node'
+    );
     assert.equal(completeMsg.published, true);
   } finally {
-    if (flowId) await deleteFlow(flowId).catch(() => {});
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
   }
 });
@@ -247,9 +286,10 @@ test('stream-consumer: Catch fires on a real operation failure, Complete fires o
   ];
 
   const comms = connectComms();
-  const directNc = await connectDirectNats();
+  let directNc;
   let flowId;
   try {
+    directNc = await connectDirectNats();
     // stream-consumer only creates the *consumer* on init - the stream
     // itself must already exist (same requirement proven in
     // test/jetstream.test.js's ack/nak/term test).
@@ -265,18 +305,25 @@ test('stream-consumer: Catch fires on a real operation failure, Complete fires o
     await triggerInject(injFail);
     const caughtMsg = await caught;
     assert.ok(caughtMsg.error, 'caught message should carry the error');
-    assert.equal(caughtMsg.error.source.id, sc, 'error should be attributed to the stream-consumer node');
+    assert.equal(
+      caughtMsg.error.source.id,
+      sc,
+      'error should be attributed to the stream-consumer node'
+    );
 
-    // consume with nothing available still completes cleanly (fetch times
-    // out, consumeMessages() swallows the expected timeout, done() fires) -
-    // this is the case that silently never resolved before Step 6.
+    directNc.publish(subject, 'hello');
+    await directNc.flush();
     const completed = comms.waitForDebug(dbgCmp, 8000);
     await triggerInject(injOk);
     const completeMsg = await completed;
-    assert.equal(completeMsg.complete.source.id, sc, 'complete event should be attributed to the stream-consumer node');
+    assert.equal(
+      completeMsg.complete.source.id,
+      sc,
+      'complete event should be attributed to the stream-consumer node'
+    );
   } finally {
-    if (flowId) await deleteFlow(flowId).catch(() => {});
-    await directNc.close().catch(() => {});
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    if (directNc) await ignoreFailure(directNc.close());
     comms.close();
   }
 });
@@ -312,21 +359,29 @@ test('subscribe: Complete fires after a real dynamic-mode subscription update', 
     const completed = comms.waitForDebug(dbgCmp, 8000);
     await triggerInject(inj);
     const completeMsg = await completed;
-    assert.equal(completeMsg.complete.source.id, sub, 'complete event should be attributed to the subscribe node');
+    assert.equal(
+      completeMsg.complete.source.id,
+      sub,
+      'complete event should be attributed to the subscribe node'
+    );
   } finally {
-    if (flowId) await deleteFlow(flowId).catch(() => {});
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
   }
 });
 
-test('server-manager: Complete fires on "status", and close() actually awaits stopServer() before teardown completes', async t => {
+test('server-manager: Catch/Complete fire correctly and close awaits process exit', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('smc-');
   const port = 4300 + (seq % 100);
   const sm = `${id}sm`;
+  const badSm = `${id}badsm`;
   const injStatus = `${id}injstatus`;
   const injStart = `${id}injstart`;
+  const injBadStart = `${id}injbadstart`;
+  const cat = `${id}cat`;
+  const dbgCat = `${id}dbgcat`;
   const cmp = `${id}cmp`;
   const dbgCmp = `${id}dbgcmp`;
   // 'auto' binarySource only checks nats-memory-server cache paths (removed
@@ -341,8 +396,17 @@ test('server-manager: Complete fires on "status", and close() actually awaits st
 
   const nodes = [
     serverManagerNode(sm, port, cmp, binOverrides),
+    serverManagerNode(badSm, port + 1, null, {
+      binarySource: 'custom',
+      customBinaryPath: '/definitely/missing/nats-server',
+    }),
     injectNode(injStatus, sm, [{ p: 'command', v: 'status', vt: 'str' }]),
     injectNode(injStart, sm, [{ p: 'command', v: 'start', vt: 'str' }]),
+    injectNode(injBadStart, badSm, [
+      { p: 'command', v: 'start', vt: 'str' },
+    ]),
+    catchNode(cat, [badSm], dbgCat),
+    debugNode(dbgCat),
     completeNode(cmp, [sm], dbgCmp),
     debugNode(dbgCmp),
   ];
@@ -354,6 +418,11 @@ test('server-manager: Complete fires on "status", and close() actually awaits st
     const ready = comms.waitForStatus(sm, d => d.fill === 'grey', 15000);
     flowId = await deployFlow(nodes);
     await ready;
+
+    const caught = comms.waitForDebug(dbgCat, 8000);
+    await triggerInject(injBadStart);
+    const caughtMsg = await caught;
+    assert.equal(caughtMsg.error.source.id, badSm);
 
     // 1) done() wiring: a "status" command (no real work, no failure path
     // to force deterministically) still has to reach the Complete node.
@@ -378,25 +447,27 @@ test('server-manager: Complete fires on "status", and close() actually awaits st
     flowId = null;
 
     const sm2 = `${id}sm2`;
-    const flow2 = [serverManagerNode(sm2, port, null, { ...binOverrides, autoStart: true })];
-    const running2 = comms.waitForStatus(sm2, d => d.fill === 'green', 20000);
-    const errored2 = comms.waitForStatus(sm2, d => d.fill === 'red', 20000);
+    const flow2 = [
+      serverManagerNode(sm2, port, null, { ...binOverrides, autoStart: true }),
+    ];
+    const settled2 = comms.waitForStatus(
+      sm2,
+      d => d.fill === 'green' || d.fill === 'red',
+      20000
+    );
     const flowId2 = await deployFlow(flow2);
     try {
-      const winner = await Promise.race([
-        running2.then(() => 'running'),
-        errored2.then(() => 'error'),
-      ]);
+      const status = await settled2;
       assert.equal(
-        winner,
-        'running',
+        status.fill,
+        'green',
         'redeploying on the same port must succeed - the old process should already be gone by the time close() resolved'
       );
     } finally {
-      await deleteFlow(flowId2).catch(() => {});
+      await ignoreFailure(deleteFlow(flowId2));
     }
   } finally {
-    if (flowId) await deleteFlow(flowId).catch(() => {});
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
   }
 });

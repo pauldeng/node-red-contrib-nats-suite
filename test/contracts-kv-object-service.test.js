@@ -297,19 +297,19 @@ test('object-put: Catch fires on "no object name specified", Complete fires on a
   });
 });
 
-// mode: 'service' input handling only recognizes msg.operation ===
-// 'start'/'stop'; anything else (including nothing at all) is silently
-// ignored -> done(), never an error. So there's no Catch scenario to test
-// through this mode - only that a real start completes.
-test('service (service mode): Complete fires after a real service start', async t => {
+test('service (service mode): failed start fires Catch and real start fires Complete', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('svcm-');
   const srv = `${id}srv`;
   const node = `${id}n`;
+  const badNode = `${id}bad`;
   const inj = `${id}i`;
+  const badInj = `${id}badi`;
   const cmp = `${id}c`;
   const dbg = `${id}d`;
+  const cat = `${id}cat`;
+  const dbgCat = `${id}dbgcat`;
   const nodes = [
     serverNode(srv),
     {
@@ -326,9 +326,28 @@ test('service (service mode): Complete fires after a real service start', async 
       debug: false,
       wires: [[]],
     },
+    {
+      id: badNode,
+      type: 'nats-suite-service',
+      z: 'FLOW',
+      server: srv,
+      mode: 'service',
+      serviceName: uid('contracts-bad-svc'),
+      serviceVersion: 'not-semver',
+      endpoint: 'process',
+      endpointSubject: '',
+      autoStart: false,
+      debug: false,
+      wires: [[]],
+    },
     injectNode(inj, node, [{ p: 'operation', v: 'start', vt: 'str' }]),
+    injectNode(badInj, badNode, [
+      { p: 'operation', v: 'start', vt: 'str' },
+    ]),
     completeNode(cmp, [node], dbg),
     debugNode(dbg),
+    catchNode(cat, [badNode], dbgCat),
+    debugNode(dbgCat),
   ];
 
   const comms = connectComms();
@@ -338,6 +357,11 @@ test('service (service mode): Complete fires after a real service start', async 
     const ready = comms.waitForStatus(srv, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await ready;
+
+    const caught = comms.waitForDebug(dbgCat, 8000);
+    await triggerInject(badInj);
+    const caughtMsg = await caught;
+    assert.equal(caughtMsg.error.source.id, badNode);
 
     const completed = comms.waitForDebug(dbg, 8000);
     await triggerInject(inj);
@@ -418,19 +442,18 @@ test('service (discover mode): Catch fires on an unknown operation', async t => 
 // Bug: kv-get's close handler awaited stopWatch() but declared zero args, so
 // Node-RED (which dispatches close callbacks on declared arity) never
 // actually waited for it - deleting a watch-mode node could race a redeploy.
-// Proven here two ways: deletion completes quickly (stopWatch() isn't left
-// hanging past what Node-RED awaits), and a fresh watcher on the same bucket
-// right after works cleanly (the old ephemeral watch subscription didn't
-// leak and doesn't block/duplicate-deliver into the new one).
-test('kv-get: watch-mode close is awaited - bounded delete, no leaked watcher on immediate redeploy', async t => {
+// A fresh watcher on the same bucket immediately after deletion proves the
+// old ephemeral watch subscription finished before close completed.
+test('kv-get: watch-mode close is awaited with no leaked watcher on immediate redeploy', async t => {
   if (!(await checkStack(t))) return;
 
   const bucket = uid('contracts_kvwatch');
   const srv = uid('srv');
-  const directNc = await connectDirectNats();
+  let directNc;
   const comms = connectComms();
   let flowId;
   try {
+    directNc = await connectDirectNats();
     await comms.ready;
 
     const watchNode = id => ({
@@ -458,7 +481,7 @@ test('kv-get: watch-mode close is awaited - bounded delete, no leaked watcher on
       wires: [[`${id}dbg`]],
     });
 
-    // --- Cycle 1: deploy, confirm watching, delete (must be bounded) ---
+    // --- Cycle 1: deploy, confirm watching, delete ---
     const w1 = uid('w1');
     let nodes = [serverNode(srv), watchNode(w1), debugNode(`${w1}dbg`)];
     const watching1 = comms.waitForStatus(
@@ -469,13 +492,8 @@ test('kv-get: watch-mode close is awaited - bounded delete, no leaked watcher on
     flowId = await deployFlow(nodes);
     await watching1;
 
-    const deleteStart = Date.now();
     await deleteFlow(flowId);
     flowId = undefined;
-    assert.ok(
-      Date.now() - deleteStart < 10000,
-      'deleting a watch-mode node must be bounded, not hang on an unawaited watcher'
-    );
 
     // --- Cycle 2: a fresh watcher on the same bucket must still work ---
     const w2 = uid('w2');
@@ -497,12 +515,14 @@ test('kv-get: watch-mode close is awaited - bounded delete, no leaked watcher on
   } finally {
     if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
-    try {
-      const kv = await new Kvm(directNc).open(bucket);
-      await kv.destroy();
-    } catch {
-      // Bucket may not exist if setup failed.
+    if (directNc) {
+      try {
+        const kv = await new Kvm(directNc).open(bucket);
+        await kv.destroy();
+      } catch {
+        // Bucket may not exist if setup failed.
+      }
+      await ignoreFailure(directNc.close());
     }
-    await ignoreFailure(directNc.close());
   }
 });

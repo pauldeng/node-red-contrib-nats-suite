@@ -17,6 +17,8 @@ A comprehensive Node-RED module for NATS (NATS Messaging System) with support fo
 - **Requires**: Node-RED `>= 5.0.0`, Node.js `>= 22.9.0`, NATS Server `>= 2.9` (with JetStream enabled for JetStream/KV/Object Store features).
 - For detailed manual test flows, see `TEST-CASES.md`. Automated tests are located in `test/` and can be executed via `npm test`.
 
+> **Server Manager credential migration:** authentication passwords, tokens, and Leaf Node passwords now use Node-RED's encrypted credential store. After upgrading, re-enter these values in each Server Manager node; old plaintext flow properties are ignored.
+
 ## Features
 
 ### Core NATS (Basic NATS Core Functionality)

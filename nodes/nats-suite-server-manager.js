@@ -24,7 +24,8 @@ module.exports = function (RED) {
     // Credentials store (encrypted), not plain defaults - see credentials
     // block in server-manager.html. Breaking change in v1.0.0: existing
     // plaintext values from flows.json do not carry over.
-    this.leafRemotePass = this.credentials.leafRemotePass || '';
+    const credentials = this.credentials || {};
+    this.leafRemotePass = credentials.leafRemotePass || '';
     this.autoStart = config.autoStart !== false;
     this.debug = config.debug || false;
 
@@ -54,8 +55,8 @@ module.exports = function (RED) {
     // Authentication options
     this.enableAuth = config.enableAuth || false;
     this.authUser = config.authUser || '';
-    this.authPassword = this.credentials.authPassword || '';
-    this.authToken = this.credentials.authToken || '';
+    this.authPassword = credentials.authPassword || '';
+    this.authToken = credentials.authToken || '';
 
     // New embedded server options
     this.serverName = config.serverName || '';
@@ -86,6 +87,38 @@ module.exports = function (RED) {
     let serverPort = null;
     let natsServerVersion = null; // Declare natsServerVersion here
     let configFile = null; // Declare configFile here to be accessible by stopServer
+    let versionProcess = null;
+    let closing = false;
+
+    const removeConfigFile = () => {
+      if (!configFile) return;
+      try {
+        fs.unlinkSync(configFile);
+      } catch (err) {
+        if (err.code !== 'ENOENT') {
+          node.warn(`Failed to delete temporary config file: ${err.message}`);
+        }
+      }
+      configFile = null;
+    };
+
+    const terminateProcess = async child => {
+      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+
+      const exited = once(child, 'exit', {
+        signal: AbortSignal.timeout(5000),
+      });
+      child.kill('SIGTERM');
+      try {
+        await exited;
+      } catch (err) {
+        if (err.name !== 'AbortError') throw err;
+        child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) {
+          await once(child, 'exit');
+        }
+      }
+    };
 
     const log = message => {
       if (node.debug) {
@@ -162,21 +195,24 @@ module.exports = function (RED) {
 
     // Helper function to get NATS server version
     const getNatsServerVersion = async natsServerBinPath => {
-      const versionProcess = spawn(natsServerBinPath, ['--version'], {
+      const child = spawn(natsServerBinPath, ['--version'], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      versionProcess = child;
       let versionOutput = '';
-      versionProcess.stdout.on('data', data => {
+      child.stdout.on('data', data => {
         versionOutput += data.toString();
       });
-      versionProcess.stderr.on('data', data => {
+      child.stderr.on('data', data => {
         versionOutput += data.toString();
       }); // NATS prints version to stderr
 
       try {
-        await once(versionProcess, 'close');
+        await once(child, 'close');
       } catch {
         return 'unknown';
+      } finally {
+        if (versionProcess === child) versionProcess = null;
       }
 
       return versionOutput.match(/v(\d+\.\d+\.\d+)/)?.[1] || 'unknown';
@@ -193,7 +229,6 @@ module.exports = function (RED) {
 
         // Validate Leaf Node configuration
         if (enableLeafNode && !node.leafRemoteUrl) {
-          node.error('Leaf Node mode requires a Remote NATS Server URL');
           setStatus('error', 'missing remote URL');
           throw new Error('Leaf Node mode requires a Remote NATS Server URL');
         }
@@ -212,14 +247,12 @@ module.exports = function (RED) {
           case 'custom':
             // Use custom binary path only
             if (!node.customBinaryPath) {
-              node.error('Custom binary source selected but no path specified');
               setStatus('error', 'no binary path');
               throw new Error(
                 'Custom binary source selected but no path specified'
               );
             }
             if (!fs.existsSync(node.customBinaryPath)) {
-              node.error(`Custom binary not found: ${node.customBinaryPath}`);
               setStatus('error', 'binary not found');
               throw new Error(
                 `Custom binary not found: ${node.customBinaryPath}`
@@ -268,9 +301,8 @@ module.exports = function (RED) {
             if (!natsServerBin) {
               const installHint =
                 'Install nats-memory-server (npm install nats-memory-server) or select "Custom Binary" and mount your own.';
-              node.error(`nats-server binary not found. ${installHint}`);
               setStatus('error', 'nats-server not found');
-              throw new Error('nats-server binary not found');
+              throw new Error(`nats-server binary not found. ${installHint}`);
             }
             break;
           }
@@ -279,6 +311,7 @@ module.exports = function (RED) {
         // Get NATS server version once at the start
         setStatus('initializing', 'checking version...');
         natsServerVersion = await getNatsServerVersion(natsServerBin);
+        if (closing) throw new Error('Server manager is closing');
         log(`NATS server binary version: v${natsServerVersion}`);
 
         // Check if MQTT is enabled (requires JetStream and server_name)
@@ -309,7 +342,6 @@ module.exports = function (RED) {
           if (useExternalConfig) {
             // Use external config file directly
             if (!fs.existsSync(node.configFilePath)) {
-              node.error(`Config file not found: ${node.configFilePath}`);
               setStatus('error', 'config not found');
               reject(
                 new Error(`Config file not found: ${node.configFilePath}`)
@@ -494,7 +526,7 @@ module.exports = function (RED) {
                 `nats-embedded-${Date.now()}.conf`
               );
               const configContent = generateNatsConfig(serverConfig);
-              fs.writeFileSync(configFile, configContent);
+              fs.writeFileSync(configFile, configContent, { mode: 0o600 });
               args.push('-c', configFile);
               log(`Using config file: ${configFile}`);
             } else {
@@ -592,6 +624,12 @@ module.exports = function (RED) {
           setStatus('starting', `spawning on :${actualPort}...`);
           log(`Spawning: ${natsServerBin} ${args.join(' ')}`);
 
+          if (closing) {
+            removeConfigFile();
+            reject(new Error('Server manager is closing'));
+            return;
+          }
+
           // Spawn the nats-server process
           natsServerProcess = spawn(natsServerBin, args, {
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -601,6 +639,8 @@ module.exports = function (RED) {
           let started = false;
           let startupOutput = '';
           let lastStatusPhase = '';
+          let startupTimeout = null;
+          let startupFailure = null;
 
           const checkStarted = data => {
             startupOutput += data.toString();
@@ -627,6 +667,7 @@ module.exports = function (RED) {
                 startupOutput.includes('Listening for client connections'))
             ) {
               started = true;
+              clearTimeout(startupTimeout);
               serverPort = actualPort; // Use actualPort (embedded or leaf port)
               const versionText =
                 natsServerVersion !== 'unknown' ? `v${natsServerVersion}` : '';
@@ -726,117 +767,92 @@ module.exports = function (RED) {
           });
 
           natsServerProcess.on('error', err => {
-            node.error(`Failed to start embedded NATS server: ${err.message}`);
+            clearTimeout(startupTimeout);
             setStatus('error', err.message.substring(0, 20));
+            removeConfigFile();
             natsServerProcess = null;
             reject(err);
           });
 
           natsServerProcess.on('exit', (code, signal) => {
+            clearTimeout(startupTimeout);
             if (!started) {
-              node.error(
-                `Embedded NATS server exited before starting. Code: ${code}, Signal: ${signal}`
-              );
               setStatus('error', `exit: ${code || signal}`);
-              // Clean up config file if it was created
-              if (configFile) {
-                try {
-                  fs.unlinkSync(configFile);
-                } catch (e) {
-                  node.warn(
-                    `Failed to delete temporary config file: ${e.message}`
-                  );
-                }
-              }
-              reject(new Error(`Server exited with code ${code}`));
+              removeConfigFile();
+              reject(
+                startupFailure || new Error(`Server exited with code ${code}`)
+              );
             } else {
               log(
                 `Embedded NATS server stopped. Code: ${code}, Signal: ${signal}`
               );
               setStatus('stopped', 'stopped');
-              // Clean up config file if it was created
-              if (configFile) {
-                try {
-                  fs.unlinkSync(configFile);
-                } catch (e) {
-                  node.warn(
-                    `Failed to delete temporary config file: ${e.message}`
-                  );
-                }
-              }
+              removeConfigFile();
             }
             natsServerProcess = null;
             serverPort = null;
           });
 
           // Timeout for startup
-          setTimeout(() => {
+          startupTimeout = setTimeout(async () => {
+            startupTimeout = null;
             if (!started) {
-              node.error('Embedded NATS server start timeout');
               setStatus('error', 'start timeout');
-              if (natsServerProcess) {
-                natsServerProcess.kill('SIGTERM');
-                natsServerProcess = null;
+              startupFailure = new Error('Server start timeout');
+              if (!natsServerProcess) {
+                removeConfigFile();
+                reject(startupFailure);
+                return;
               }
-              // Clean up config file if it was created
-              if (configFile) {
-                try {
-                  fs.unlinkSync(configFile);
-                } catch (e) {
-                  node.warn(
-                    `Failed to delete temporary config file: ${e.message}`
-                  );
-                }
+              try {
+                await terminateProcess(natsServerProcess);
+              } catch (err) {
+                reject(err);
               }
-              reject(new Error('Server start timeout'));
             }
           }, 10000);
         });
       } catch (err) {
-        node.error(`Failed to start embedded server: ${err.message}`);
         setStatus('error', err.message.substring(0, 20));
         throw err; // Re-throw the error to be caught by the caller
       }
     };
 
     // Stop server
-    const stopServer = async () => {
+    const stopServer = async (notify = true) => {
       log('Stopping NATS server...');
       setStatus('stopped', 'stopping...');
 
-      // Clean up config file if it was created
-      if (configFile) {
+      removeConfigFile();
+
+      if (versionProcess) {
+        const child = versionProcess;
         try {
-          fs.unlinkSync(configFile);
-        } catch (e) {
-          node.warn(`Failed to delete temporary config file: ${e.message}`);
+          await terminateProcess(child);
+        } catch {
+          // A failed spawn is already handled by getNatsServerVersion().
         }
-        configFile = null; // Reset configFile after cleanup
       }
 
       if (natsServerProcess) {
-        // Process server
-        natsServerProcess.kill('SIGTERM');
-        natsServerProcess = null;
+        const process = natsServerProcess;
+        await terminateProcess(process);
         log('Server process stopped');
       }
 
       serverPort = null;
       setStatus('stopped');
-      node.send({
-        topic: 'server.stopped',
-        payload: { type: node.serverType },
-      });
+      if (notify) {
+        node.send({
+          topic: 'server.stopped',
+          payload: { type: node.serverType },
+        });
+      }
     };
 
     // Start server (always embedded now)
     const startServer = async () => {
-      try {
-        await startEmbeddedServer();
-      } catch (err) {
-        node.error(`Error while starting: ${err.message}`);
-        setStatus('error', err.message.substring(0, 20));
-      }
+      await startEmbeddedServer();
     };
 
     // Input handler
@@ -858,9 +874,6 @@ module.exports = function (RED) {
               node.warn('Server is already running');
               break;
             }
-            // startServer() catches and reports its own errors (it also
-            // runs unattended from auto-start, not just this handler) and
-            // never rejects.
             await startServer();
             break;
           case 'stop':
@@ -872,10 +885,10 @@ module.exports = function (RED) {
             break;
           case 'restart':
             await stopServer();
-            setTimeout(() => startServer(), 1000);
+            await startServer();
             break;
           case 'status':
-            node.send({
+            send({
               topic: 'server.status',
               payload: {
                 running: !!natsServerProcess,
@@ -907,14 +920,14 @@ module.exports = function (RED) {
 
     // Auto-start if configured
     if (node.autoStart) {
-      // Set initial status immediately so user sees the node is preparing
-      setStatus('initializing', 'auto-start in 1s...');
-      setTimeout(async () => {
-        setStatus('initializing', 'starting...');
-        // Small delay to ensure UI updates before heavy work
-        await new Promise(r => setTimeout(r, 50));
-        startServer();
-      }, 1000);
+      const autoStart = async () => {
+        try {
+          await startServer();
+        } catch (err) {
+          if (!closing) node.error(`Error while starting: ${err.message}`);
+        }
+      };
+      autoStart();
     } else {
       setStatus('stopped');
     }
@@ -924,8 +937,15 @@ module.exports = function (RED) {
     // never awaited even though it looks correct; a redeploy could then start
     // a new instance before the old nats-server child process actually exits.
     node.on('close', async done => {
-      await stopServer();
-      done();
+      closing = true;
+      let closeError;
+      try {
+        await stopServer(false);
+      } catch (err) {
+        closeError = err;
+      } finally {
+        done(closeError);
+      }
     });
   }
 

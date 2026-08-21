@@ -28,7 +28,6 @@
         "leafPort": 7422,
         "leafRemoteUrl": "",
         "leafRemoteUser": "",
-        "leafRemotePass": "",
         "autoStart": false,
         "debug": true,
         "x": 400,
@@ -121,4 +120,3 @@
         "wires": [["server-manager"]]
     }
 ]
-

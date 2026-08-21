@@ -29,6 +29,7 @@ module.exports = function (RED) {
 
     let subscription = null;
     let subscriptionIterator = null; // For Async Iterator cleanup
+    let closing = false;
     let currentSubject = ''; // Current active subscription subject
     const baseSubject = config.datapointid || ''; // Base subject from config (fallback)
     let connectionTimeout = null;
@@ -314,6 +315,7 @@ module.exports = function (RED) {
     ) => {
       try {
         const natsnc = await this.config.getConnection();
+        if (closing) return;
 
         // Determine subject to use
         // If newSubject is explicitly null, keep current; if undefined, use current/base
@@ -330,16 +332,15 @@ module.exports = function (RED) {
         }
 
         if (!targetSubject || targetSubject.trim() === '') {
-          node.error(
-            'No subject specified. Please configure a NATS subject or provide msg.topic/msg.subject.'
-          );
           setStatusRed();
           if (isDebug) {
             node.log(
               `[[NATS-SUITE SUBSCRIBE] setupSubscription aborted: no subject specified`
             );
           }
-          return;
+          throw new Error(
+            'No subject specified. Please configure a NATS subject or provide msg.topic/msg.subject.'
+          );
         }
 
         // Determine queue group
@@ -364,13 +365,11 @@ module.exports = function (RED) {
               );
             }
             subscription.unsubscribe();
+            if (subscriptionIterator) await subscriptionIterator;
             subscription = null;
           }
 
-          // Cleanup running iterator
-          if (subscriptionIterator) {
-            subscriptionIterator = null;
-          }
+          subscriptionIterator = null;
 
           // Update current subject and queue group
           currentSubject = targetSubject;
@@ -404,6 +403,7 @@ module.exports = function (RED) {
             );
           }
         }
+        const activeSubscription = subscription;
 
         // Async iterator for message processing. Verified against the real
         // server (@nats-io/nats-core 3.4.0): the for-await loop never throws
@@ -417,10 +417,10 @@ module.exports = function (RED) {
               `[[NATS-SUITE SUBSCRIBE] Message listener started, waiting for messages...`
             );
           }
-          for await (const msg of subscription) {
+          for await (const msg of activeSubscription) {
             processMessage(msg);
           }
-          const closeErr = await subscription.closed;
+          const closeErr = await activeSubscription.closed;
           if (closeErr) {
             const cleanError = {
               message: closeErr.message,
@@ -432,21 +432,16 @@ module.exports = function (RED) {
                 `[[NATS-SUITE SUBSCRIBE] Subscription closed with error: ${closeErr.message}`
               );
             }
-            node.error(cleanError, { topic: currentSubject });
+            node.error(cleanError, { topic: targetSubject });
           }
         })();
       } catch (err) {
-        const cleanError = {
-          message: err.message,
-          code: err.code,
-          name: err.name,
-        };
         if (isDebug) {
           node.log(
             `[[NATS-SUITE SUBSCRIBE] setupSubscription error: ${err.message}`
           );
         }
-        node.error(cleanError, { topic: currentSubject || baseSubject });
+        throw err;
       }
     };
 
@@ -512,7 +507,14 @@ module.exports = function (RED) {
     // reconnects, so this never needs to run again. setupSubscription() is
     // itself idempotent (it no-ops if the subject/queue hasn't changed).
     if (currentSubject || baseSubject) {
-      setupSubscription();
+      const initializeSubscription = async () => {
+        try {
+          await setupSubscription();
+        } catch (err) {
+          node.error(err, { topic: currentSubject || baseSubject });
+        }
+      };
+      initializeSubscription();
     }
 
     // Input handler for dynamic subscription changes
@@ -585,18 +587,8 @@ module.exports = function (RED) {
             }
             await setupSubscription(newSubject, dynamicQueueGroup);
           } catch (err) {
-            // Deliberately non-fatal: setupSubscription() is retried on the
-            // next input or reconnect, so this input message still counts as
-            // handled - done(err) here would fire every Catch node for a
-            // transient, self-recovering condition the code already logs.
-            node.warn(
-              `Cannot update subscription: ${err.message}. Will retry when connected.`
-            );
-            if (isDebug) {
-              node.log(
-                `[[NATS-SUITE SUBSCRIBE] Subscription update failed: ${err.message}`
-              );
-            }
+            setStatusRed();
+            throw err;
           }
           done();
         } else {
@@ -613,12 +605,8 @@ module.exports = function (RED) {
                 await setupSubscription(baseSubject, null);
               }
             } catch (err) {
-              // Ignore errors during reset
-              if (isDebug) {
-                node.log(
-                  `[[NATS-SUITE SUBSCRIBE] Reset to base subject failed (ignoring): ${err.message}`
-                );
-              }
+              setStatusRed();
+              throw err;
             }
           }
           done();
@@ -635,18 +623,23 @@ module.exports = function (RED) {
     });
 
     // on node close
-    node.on('close', function (done) {
-      if (subscription) {
-        node.log('Unsubscribing from subscription on close');
-        subscription.unsubscribe();
+    node.on('close', async function (done) {
+      let closeError;
+      try {
+        closing = true;
+        if (subscription) {
+          node.log('Unsubscribing from subscription on close');
+          subscription.unsubscribe();
+          if (subscriptionIterator) await subscriptionIterator;
+        }
+      } catch (err) {
+        closeError = err;
+      } finally {
+        if (connectionTimeout) clearTimeout(connectionTimeout);
+        detachStatus();
+        this.config.unregisterConnectionUser(node.id);
+        done(closeError);
       }
-      if (connectionTimeout) {
-        clearTimeout(connectionTimeout);
-      }
-      detachStatus();
-      // Connection Pool: Unregister this node as connection user
-      this.config.unregisterConnectionUser(node.id);
-      done();
     });
   }
 

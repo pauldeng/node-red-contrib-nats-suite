@@ -20,6 +20,7 @@ module.exports = function (RED) {
 
     let nc = null;
     let service = null;
+    let closing = false;
     const isDebug = !!config.debug;
 
     // Service state
@@ -77,6 +78,7 @@ module.exports = function (RED) {
 
       try {
         nc = await node.serverConfig.getConnection();
+        if (closing) throw new Error('Service node is closing');
 
         const serviceName = config.serviceName || 'default-service';
         const version = config.serviceVersion || '1.0.0';
@@ -101,7 +103,7 @@ module.exports = function (RED) {
 
         // Create service
         service = await new Svcm(nc).add(serviceConfig);
-        isServiceRunning = true;
+        if (closing) throw new Error('Service node is closing');
 
         // Add endpoint
         const endpoint = config.endpoint || 'process';
@@ -215,6 +217,7 @@ module.exports = function (RED) {
           subject,
           handler: endpointHandler,
         });
+        isServiceRunning = true;
 
         node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
         node.log(`[SERVICE] Endpoint: ${subject}`);
@@ -224,8 +227,16 @@ module.exports = function (RED) {
           text: `${serviceName} (running)`,
         });
       } catch (err) {
-        node.error(`[SERVICE] Failed to start service: ${err.message}`);
+        if (service && !isServiceRunning) {
+          try {
+            await service.stop();
+          } catch (stopErr) {
+            node.warn(`[SERVICE] Failed to roll back startup: ${stopErr.message}`);
+          }
+          service = null;
+        }
         node.status({ fill: 'red', shape: 'ring', text: 'start failed' });
+        throw err;
       }
     };
 
@@ -243,7 +254,8 @@ module.exports = function (RED) {
         node.log('[SERVICE] Service stopped');
         node.status({ fill: 'grey', shape: 'ring', text: 'stopped' });
       } catch (err) {
-        node.error(`[SERVICE] Failed to stop service: ${err.message}`);
+        node.status({ fill: 'red', shape: 'ring', text: 'stop failed' });
+        throw err;
       }
     };
 
@@ -717,7 +729,16 @@ module.exports = function (RED) {
     // getConnection() internally, so it naturally waits for the first
     // connection rather than needing a delay-then-poll timer here.
     if (config.mode === 'service' && config.autoStart) {
-      startService();
+      const autoStart = async () => {
+        try {
+          await startService();
+        } catch (err) {
+          if (!closing) {
+            node.error(`[SERVICE] Failed to start service: ${err.message}`);
+          }
+        }
+      };
+      autoStart();
     } else if (config.mode === 'health') {
       // Initial health check
       if (config.checkOnStart) {
@@ -895,6 +916,7 @@ module.exports = function (RED) {
     // ==================== CLEANUP ====================
 
     node.on('close', async function (done) {
+      closing = true;
       if (healthCheckInterval) {
         clearInterval(healthCheckInterval);
         healthCheckInterval = null;
@@ -903,11 +925,17 @@ module.exports = function (RED) {
         clearTimeout(healthCheckStartTimer);
         healthCheckStartTimer = null;
       }
-      await stopService();
-      detachStatus();
-      this.serverConfig.unregisterConnectionUser(node.id);
-      node.status({});
-      done();
+      let closeError;
+      try {
+        await stopService();
+      } catch (err) {
+        closeError = err;
+      } finally {
+        detachStatus();
+        this.serverConfig.unregisterConnectionUser(node.id);
+        node.status({});
+        done(closeError);
+      }
     });
   }
 
