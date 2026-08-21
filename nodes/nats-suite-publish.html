@@ -100,161 +100,143 @@
     .nats-publish-config {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    
+
     .nats-section {
-      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
-      border: 1px solid #e1e4e8;
+      background: var(--red-ui-form-background);
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 8px;
       margin-bottom: 12px;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    
+
     .nats-section-header {
-      background: linear-gradient(135deg, #f1f3f5 0%, #e9ecef 100%);
+      background: var(--red-ui-secondary-background);
       padding: 10px 14px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #e1e4e8;
-      transition: background 0.2s ease;
+      border-bottom: 1px solid var(--red-ui-form-input-border-color);
       user-select: none;
     }
-    
-    .nats-section-header:hover {
-      background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
-    }
-    
+
     .nats-section-header.collapsed {
       border-bottom: none;
     }
-    
+
     .nats-section-title {
       display: flex;
       align-items: center;
       gap: 10px;
       font-weight: 600;
       font-size: 13px;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
     }
-    
+
     .nats-section-title i {
       width: 18px;
       text-align: center;
-      color: #2FAF9C;
       font-size: 14px;
     }
-    
+
     .nats-section-toggle {
-      color: #6c757d;
+      color: var(--red-ui-secondary-text-color);
       font-size: 11px;
       transition: transform 0.2s ease;
     }
-    
+
     .nats-section-content {
       padding: 14px;
     }
-    
+
     .nats-form-row {
       margin-bottom: 12px;
     }
-    
+
     .nats-form-row:last-child {
       margin-bottom: 0;
     }
-    
+
     .nats-form-row label {
       display: block;
       font-size: 12px;
       font-weight: 500;
-      color: #495057;
+      color: var(--red-ui-form-text-color);
       margin-bottom: 5px;
     }
-    
+
     .nats-form-row label i {
       margin-right: 6px;
-      color: #2FAF9C;
       width: 14px;
       text-align: center;
     }
-    
+
     .nats-form-row input[type="text"],
     .nats-form-row input[type="number"],
     .nats-form-row select {
       width: 100%;
       padding: 8px 10px;
-      border: 1px solid #ced4da;
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 6px;
       font-size: 13px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      background: #fff;
+      background: var(--red-ui-form-input-background);
+      color: var(--red-ui-form-text-color);
     }
-    
+
     .nats-form-row input:focus,
     .nats-form-row select:focus {
-      border-color: #2FAF9C;
-      box-shadow: 0 0 0 3px rgba(47, 175, 156, 0.15);
+      border-color: var(--red-ui-form-input-focus-color);
       outline: none;
     }
-    
+
     .nats-form-row input[type="number"] {
       width: 120px;
     }
-    
-    .nats-hint {
-      font-size: 11px;
-      color: #6c757d;
-      margin-top: 4px;
-      line-height: 1.4;
-    }
-    
+
     .nats-unit {
       font-size: 12px;
-      color: #6c757d;
+      color: var(--red-ui-form-placeholder-color);
       margin-left: 8px;
     }
-    
+
     .nats-checkbox-row {
       display: flex;
       align-items: center;
       gap: 8px;
       padding: 8px 0;
     }
-    
+
     .nats-checkbox-row input[type="checkbox"] {
       width: 16px;
       height: 16px;
-      accent-color: #2FAF9C;
       cursor: pointer;
     }
-    
+
     .nats-checkbox-row label {
       margin: 0;
       font-size: 13px;
       font-weight: 500;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
       cursor: pointer;
     }
-    
+
     .nats-checkbox-row label i {
       margin-right: 8px;
-      color: #2FAF9C;
     }
-    
+
     .nats-options {
       display: none;
       padding-top: 12px;
-      border-top: 1px dashed #dee2e6;
+      border-top: 1px dashed var(--red-ui-form-input-border-color);
       margin-top: 8px;
     }
-    
+
     .nats-inline-row {
       display: flex;
       align-items: center;
       gap: 8px;
     }
-    
+
     .nats-badge {
       display: inline-block;
       padding: 2px 8px;
@@ -263,43 +245,43 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+      border: 1px solid;
     }
-    
+
     .nats-badge-optional {
-      background: #e9ecef;
-      color: #6c757d;
+      border-color: var(--red-ui-form-input-border-color);
+      color: var(--red-ui-secondary-text-color);
     }
-    
+
     .nats-badge-dynamic {
-      background: #d4edda;
-      color: #155724;
+      border-color: var(--red-ui-border-color-success);
+      color: var(--red-ui-form-text-color);
     }
-    
+
     .nats-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
     }
-    
+
     @media (max-width: 500px) {
       .nats-grid {
         grid-template-columns: 1fr;
       }
     }
-    
+
     .nats-divider {
       height: 1px;
-      background: linear-gradient(90deg, transparent, #dee2e6, transparent);
+      background: var(--red-ui-form-input-border-color);
       margin: 16px 0;
     }
-    
+
     .nats-feature-tag {
       display: inline-flex;
       align-items: center;
       gap: 4px;
       padding: 3px 8px;
-      background: linear-gradient(135deg, #2FAF9C 0%, #3CC9AD 100%);
-      color: white;
+      border: 1px solid var(--red-ui-border-color-success);
       border-radius: 4px;
       font-size: 10px;
       font-weight: 600;
@@ -383,7 +365,7 @@
               <input type="number" id="node-input-requestTimeout" placeholder="5000" min="100" max="60000">
               <span class="nats-unit">ms</span>
             </div>
-            <div class="nats-hint">
+            <div class="form-tips">
               Sends request and waits for reply. Reply appears at output.<br>
               On timeout: <code>msg.error</code> is set with timeout info.
             </div>
@@ -398,7 +380,7 @@
           <input type="checkbox" id="node-input-enableAutoReply">
           <label for="node-input-enableAutoReply"><i class="fa fa-reply"></i>Auto-Reply (Reply mode only)</label>
         </div>
-        <div class="nats-hint" style="margin-left: 24px;">
+        <div class="form-tips" style="margin-left: 24px;">
           In Reply mode, forwards the incoming message to the output for processing, then publishes the returned message back as a reply.
         </div>
       </div>
@@ -425,7 +407,7 @@
           <div class="nats-form-row">
             <label><i class="fa fa-code"></i>Static Headers (JSON) <span class="nats-badge nats-badge-optional">optional</span></label>
             <input type="text" id="node-input-headers" placeholder='{"X-App": "MyApp", "X-Priority": "high"}'>
-            <div class="nats-hint">
+            <div class="form-tips">
               Static headers merged with dynamic <code>msg.headers</code> at runtime
             </div>
           </div>
@@ -437,49 +419,46 @@
   </div>
 </script>
 
-<script type="text/x-red" data-help-name="nats-suite-publish">
-  <p>Publishes messages to NATS subjects with advanced features.</p>
+<script type="text/markdown" data-help-name="nats-suite-publish">
+Publishes messages to NATS subjects with advanced features.
 
-  <h3>Inputs</h3>
-  <dl class="message-properties">
-    <dt>payload <span class="property-type">any</span></dt>
-    <dd>The data to publish. Format depends on the selected data format.</dd>
-    
-    <dt class="optional">topic <span class="property-type">string</span></dt>
-    <dd>Override the configured NATS subject (only if "Allow msg.topic to override subject" is enabled in publish/request modes).</dd>
-    
-    <dt class="optional">headers <span class="property-type">object</span></dt>
-    <dd>Dynamic NATS headers to include with the message.</dd>
+### Inputs
 
-    <dt class="optional">_reply / _unsreply <span class="property-type">string</span></dt>
-    <dd>Reply-to subject used when mode is set to "Reply".</dd>
-  </dl>
+: payload (any) : The data to publish. Format depends on the selected data format.
+: topic (string, optional) : Override the configured NATS subject (only if "Allow msg.topic to override subject" is enabled in publish/request modes).
+: headers (object, optional) : Dynamic NATS headers to include with the message.
+: _reply / _unsreply (string, optional) : Reply-to subject used when mode is set to "Reply".
 
-  <h3>Data Formats</h3>
-  <ul>
-    <li><strong>JSON:</strong> Automatically stringifies objects</li>
-    <li><strong>String:</strong> Sends payload as-is</li>
-    <li><strong>Buffer:</strong> Binary data support</li>
-  </ul>
+### Data Formats
 
-  <h3>Features</h3>
+ - **JSON:** Automatically stringifies objects
+ - **String:** Sends payload as-is
+ - **Buffer:** Binary data support
 
-  <h4>Message Headers</h4>
-  <p>Add custom NATS headers to messages. Static headers configured in the node are merged with dynamic headers from <code>msg.headers</code>.</p>
-  <pre>msg.headers = {
+### Features
+
+#### Message Headers
+
+Add custom NATS headers to messages. Static headers configured in the node are merged with dynamic headers from `msg.headers`.
+
+```
+msg.headers = {
   "X-User": "john",
   "X-Request-ID": "abc123"
-};</pre>
+};
+```
 
-  <h4>Request-Reply Mode (Client Side)</h4>
-  <p>Enables the NATS request-reply pattern. The node sends a request to the configured subject and waits for a reply.</p>
-  <ul>
-    <li>Automatically generates a unique inbox subject for the reply</li>
-    <li>Waits for response up to the configured timeout</li>
-    <li>Reply message appears at the node output</li>
-    <li>On timeout: <code>msg.error</code> contains timeout information</li>
-  </ul>
-  <pre>// Input
+#### Request-Reply Mode (Client Side)
+
+Enables the NATS request-reply pattern. The node sends a request to the configured subject and waits for a reply.
+
+ - Automatically generates a unique inbox subject for the reply
+ - Waits for response up to the configured timeout
+ - Reply message appears at the node output
+ - On timeout: `msg.error` contains timeout information
+
+```
+// Input
 msg.payload = { action: "getData", id: 123 };
 msg.topic = "my.service";
 
@@ -488,14 +467,15 @@ msg.payload = { result: "data..." };
 msg.requestTime = 45; // ms
 
 // Output (on timeout)
-msg.error = { message: "Request timeout", code: "TIMEOUT" };</pre>
+msg.error = { message: "Request timeout", code: "TIMEOUT" };
+```
 
-  <h4>Auto-Reply Handler (Service Side)</h4>
-  <p>For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.</p>
+#### Auto-Reply Handler (Service Side)
 
-  <h3>Subject Wildcards</h3>
-  <ul>
-    <li><code>*</code> - matches a single token (e.g., <code>sensor.*.temperature</code>)</li>
-    <li><code>&gt;</code> - matches one or more tokens (e.g., <code>sensor.&gt;</code>)</li>
-  </ul>
+For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.
+
+### Subject Wildcards
+
+ - `*` - matches a single token (e.g., `sensor.*.temperature`)
+ - `>` - matches one or more tokens (e.g., `sensor.>`)
 </script>

@@ -92,26 +92,21 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     .nats-section {
-      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
-      border: 1px solid #e1e4e8;
+      background: var(--red-ui-form-background);
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 8px;
       margin-bottom: 12px;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     .nats-section-header {
-      background: linear-gradient(135deg, #f1f3f5 0%, #e9ecef 100%);
+      background: var(--red-ui-secondary-background);
       padding: 10px 14px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #e1e4e8;
-      transition: background 0.2s ease;
+      border-bottom: 1px solid var(--red-ui-form-input-border-color);
       user-select: none;
-    }
-    .nats-section-header:hover {
-      background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
     }
     .nats-section-header.collapsed { border-bottom: none; }
     .nats-section-title {
@@ -120,16 +115,15 @@
       gap: 10px;
       font-weight: 600;
       font-size: 13px;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
     }
     .nats-section-title i {
       width: 18px;
       text-align: center;
-      color: #2FAF9C;
       font-size: 14px;
     }
     .nats-section-toggle {
-      color: #6c757d;
+      color: var(--red-ui-secondary-text-color);
       font-size: 11px;
     }
     .nats-section-content { padding: 14px; }
@@ -139,12 +133,11 @@
       display: block;
       font-size: 12px;
       font-weight: 500;
-      color: #495057;
+      color: var(--red-ui-form-text-color);
       margin-bottom: 5px;
     }
     .nats-form-row label i {
       margin-right: 6px;
-      color: #2FAF9C;
       width: 14px;
       text-align: center;
     }
@@ -155,17 +148,16 @@
     .nats-form-row textarea {
       width: 100%;
       padding: 8px 10px;
-      border: 1px solid #ced4da;
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 6px;
       font-size: 13px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      background: #fff;
+      background: var(--red-ui-form-input-background);
+      color: var(--red-ui-form-text-color);
     }
     .nats-form-row input:focus,
     .nats-form-row select:focus,
     .nats-form-row textarea:focus {
-      border-color: #2FAF9C;
-      box-shadow: 0 0 0 3px rgba(47, 175, 156, 0.15);
+      border-color: var(--red-ui-form-input-focus-color);
       outline: none;
     }
     .nats-form-row input[type="number"] { width: 120px; }
@@ -173,12 +165,6 @@
       font-family: 'Monaco', 'Menlo', monospace;
       font-size: 11px;
       resize: vertical;
-    }
-    .nats-hint {
-      font-size: 11px;
-      color: #6c757d;
-      margin-top: 4px;
-      line-height: 1.4;
     }
     .nats-checkbox-row {
       display: flex;
@@ -189,19 +175,17 @@
     .nats-checkbox-row input[type="checkbox"] {
       width: 16px;
       height: 16px;
-      accent-color: #2FAF9C;
       cursor: pointer;
     }
     .nats-checkbox-row label {
       margin: 0;
       font-size: 13px;
       font-weight: 500;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
       cursor: pointer;
     }
     .nats-checkbox-row label i {
       margin-right: 8px;
-      color: #2FAF9C;
     }
     .nats-grid {
       display: grid;
@@ -211,12 +195,12 @@
     .nats-auth-section {
       display: none;
       padding-top: 12px;
-      border-top: 1px dashed #dee2e6;
+      border-top: 1px dashed var(--red-ui-form-input-border-color);
       margin-top: 8px;
     }
     .nats-unit {
       font-size: 12px;
-      color: #6c757d;
+      color: var(--red-ui-form-placeholder-color);
       margin-left: 8px;
     }
     .nats-inline-row {
@@ -241,7 +225,7 @@
         <div class="nats-form-row">
           <label><i class="fa fa-link"></i>NATS Server URL</label>
           <input type="text" id="node-config-input-server" placeholder="nats://localhost:4222">
-          <div class="nats-hint">
+          <div class="form-tips">
             Examples: <code>nats://localhost:4222</code>, <code>nats://server1:4222,nats://server2:4222</code>
           </div>
         </div>
@@ -317,7 +301,7 @@
         </div>
         
         <!-- TLS -->
-        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #e9ecef;">
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--red-ui-form-input-border-color);">
           <div class="nats-checkbox-row">
             <input type="checkbox" id="node-config-input-enableTLS">
             <label for="node-config-input-enableTLS"><i class="fa fa-lock"></i>Enable TLS/SSL Encryption</label>
@@ -384,7 +368,7 @@
           <label><i class="fa fa-exclamation-triangle"></i>Max Ping Outs</label>
           <div class="nats-inline-row">
             <input type="number" id="node-config-input-maxPingOut" min="1" max="10" placeholder="3">
-            <span class="nats-hint" style="margin: 0;">before disconnect</span>
+            <span class="form-tips" style="margin: 0;">before disconnect</span>
           </div>
         </div>
       </div>
@@ -393,28 +377,29 @@
   </div>
 </script>
 
-<script type="text/x-red" data-help-name="nats-suite-server">
-  <p>Configures a connection to a NATS server.</p>
+<script type="text/markdown" data-help-name="nats-suite-server">
+Configures a connection to a NATS server.
 
-  <h3>Connection URL</h3>
-  <p>Examples:</p>
-  <ul>
-    <li><code>nats://localhost:4222</code> - Local server</li>
-    <li><code>nats://server1:4222,nats://server2:4222</code> - Cluster</li>
-  </ul>
+### Connection URL
 
-  <h3>Authentication</h3>
-  <ul>
-    <li><strong>None:</strong> No authentication</li>
-    <li><strong>Username/Password:</strong> Basic auth</li>
-    <li><strong>Token:</strong> Single token</li>
-    <li><strong>JWT + NKey:</strong> NATS 2.x authentication</li>
-    <li><strong>NKey:</strong> Cryptographic auth</li>
-  </ul>
+Examples:
 
-  <h3>TLS/SSL</h3>
-  <p>Enable TLS for encrypted connections. For mutual TLS (mTLS), provide client certificate and key.</p>
+ - `nats://localhost:4222` - Local server
+ - `nats://server1:4222,nats://server2:4222` - Cluster
 
-  <h3>Reconnection</h3>
-  <p>Retries indefinitely using the native NATS reconnect loop and the configured reconnect wait.</p>
+### Authentication
+
+ - **None:** No authentication
+ - **Username/Password:** Basic auth
+ - **Token:** Single token
+ - **JWT + NKey:** NATS 2.x authentication
+ - **NKey:** Cryptographic auth
+
+### TLS/SSL
+
+Enable TLS for encrypted connections. For mutual TLS (mTLS), provide client certificate and key.
+
+### Reconnection
+
+Retries indefinitely using the native NATS reconnect loop and the configured reconnect wait.
 </script>

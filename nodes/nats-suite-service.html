@@ -87,16 +87,6 @@
         $('#node-input-discoveryFilter').val(this.serviceName || '*');
       }
 
-      // Collapsible sections
-      $('.nats-section-header').on('click', function() {
-        const $header = $(this);
-        const $content = $header.next('.nats-section-content');
-        const $icon = $header.find('.nats-section-toggle');
-        $content.slideToggle(200);
-        $icon.toggleClass('fa-chevron-down fa-chevron-right');
-        $header.toggleClass('collapsed');
-      });
-      
       // Mode handler
       $('#node-input-mode').on('change', function() {
         const mode = $(this).val();
@@ -148,397 +138,189 @@
 </script>
 
 <script type="text/x-red" data-template-name="nats-suite-service">
-  <style>
-    .nats-service-config {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    .nats-section {
-      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
-      border: 1px solid #e1e4e8;
-      border-radius: 8px;
-      margin-bottom: 12px;
-      overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    }
-    .nats-section-header {
-      background: linear-gradient(135deg, #f1f3f5 0%, #e9ecef 100%);
-      padding: 10px 14px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid #e1e4e8;
-      transition: background 0.2s ease;
-      user-select: none;
-    }
-    .nats-section-header:hover {
-      background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
-    }
-    .nats-section-header.collapsed { border-bottom: none; }
-    .nats-section-title {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 600;
-      font-size: 13px;
-      color: #2c3e50;
-    }
-    .nats-section-title i {
-      width: 18px;
-      text-align: center;
-      color: #2FAF9C;
-      font-size: 14px;
-    }
-    .nats-section-toggle {
-      color: #6c757d;
-      font-size: 11px;
-    }
-    .nats-section-content { padding: 14px; }
-    .nats-form-row { margin-bottom: 12px; }
-    .nats-form-row:last-child { margin-bottom: 0; }
-    .nats-form-row label {
-      display: block;
-      font-size: 12px;
-      font-weight: 500;
-      color: #495057;
-      margin-bottom: 5px;
-    }
-    .nats-form-row label i {
-      margin-right: 6px;
-      color: #2FAF9C;
-      width: 14px;
-      text-align: center;
-    }
-    .nats-form-row input[type="text"],
-    .nats-form-row input[type="number"],
-    .nats-form-row select {
-      width: 100%;
-      padding: 8px 10px;
-      border: 1px solid #ced4da;
-      border-radius: 6px;
-      font-size: 13px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      background: #fff;
-    }
-    .nats-form-row input:focus,
-    .nats-form-row select:focus {
-      border-color: #2FAF9C;
-      box-shadow: 0 0 0 3px rgba(47, 175, 156, 0.15);
-      outline: none;
-    }
-    .nats-form-row input[type="number"] { width: 120px; }
-    .nats-hint {
-      font-size: 11px;
-      color: #6c757d;
-      margin-top: 4px;
-    }
-    .nats-checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 0;
-    }
-    .nats-checkbox-row input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      accent-color: #2FAF9C;
-      cursor: pointer;
-    }
-    .nats-checkbox-row label {
-      margin: 0;
-      font-size: 13px;
-      font-weight: 500;
-      color: #2c3e50;
-      cursor: pointer;
-    }
-    .nats-checkbox-row label i {
-      margin-right: 8px;
-      color: #2FAF9C;
-    }
-    .nats-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    .nats-unit {
-      font-size: 12px;
-      color: #6c757d;
-      margin-left: 8px;
-    }
-    .nats-inline-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-  </style>
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Optional display name">
+  </div>
+  <div class="form-row">
+    <label for="node-input-server"><i class="fa fa-server"></i> NATS Server</label>
+    <input type="text" id="node-input-server">
+  </div>
+  <div class="form-row">
+    <label for="node-input-mode"><i class="fa fa-cogs"></i> Mode</label>
+    <select id="node-input-mode" style="width:70%">
+      <option value="discover">Service Discovery</option>
+      <option value="stats">Service Stats</option>
+      <option value="ping">Ping Services</option>
+      <option value="service">Run Service</option>
+      <option value="health">Health Check</option>
+      <option value="nats-stats">NATS Stats</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <label for="node-input-debug"> </label>
+    <label for="node-input-debug" style="width:70%">
+      <input type="checkbox" id="node-input-debug" style="display:inline-block; width:22px; vertical-align:top;">Enable Debug Logging
+    </label>
+  </div>
 
-  <div class="nats-service-config">
-    
-    <!-- Basic Configuration -->
-    <div class="nats-section">
-      <div class="nats-section-header">
-        <div class="nats-section-title">
-          <i class="fa fa-cog"></i>
-          <span>Basic Configuration</span>
-        </div>
-        <i class="fa fa-chevron-down nats-section-toggle"></i>
-      </div>
-      <div class="nats-section-content">
-        <div class="nats-form-row">
-          <label><i class="fa fa-tag"></i>Name</label>
-          <input type="text" id="node-input-name" placeholder="Optional display name">
-        </div>
-        <div class="nats-form-row">
-          <label><i class="fa fa-server"></i>NATS Server</label>
-          <input type="text" id="node-input-server">
-        </div>
-        <div class="nats-form-row">
-          <label><i class="fa fa-cogs"></i>Mode</label>
-          <select id="node-input-mode">
-            <option value="discover">Service Discovery</option>
-            <option value="stats">Service Stats</option>
-            <option value="ping">Ping Services</option>
-            <option value="service">Run Service</option>
-            <option value="health">Health Check</option>
-            <option value="nats-stats">NATS Stats</option>
-          </select>
-        </div>
-        <div class="nats-checkbox-row">
-          <input type="checkbox" id="node-input-debug">
-          <label for="node-input-debug"><i class="fa fa-bug"></i>Enable Debug Logging</label>
-        </div>
-      </div>
+  <div id="discovery-config">
+    <h4>Discovery Filter</h4>
+    <div class="form-row">
+      <label for="node-input-discoveryFilter"><i class="fa fa-filter"></i> Service Name Filter</label>
+      <input type="text" id="node-input-discoveryFilter" placeholder="my-service (or * for all)" style="width:70%">
     </div>
-    
-    <!-- Discovery Config -->
-    <div id="discovery-config">
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-search"></i>
-            <span>Discovery Filter</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-form-row">
-            <label><i class="fa fa-filter"></i>Service Name Filter</label>
-            <input type="text" id="node-input-discoveryFilter" placeholder="my-service (or * for all)">
-            <div class="nats-hint">Use * to discover all services</div>
-          </div>
-        </div>
-      </div>
+    <div class="form-row form-tips">Use <code>*</code> to discover all services.</div>
+  </div>
+
+  <div id="service-config" style="display: none;">
+    <h4>Service Configuration</h4>
+    <div class="form-row">
+      <label for="node-input-serviceName"><i class="fa fa-tag"></i> Service Name</label>
+      <input type="text" id="node-input-serviceName" placeholder="my-service" style="width:70%">
     </div>
-    
-    <!-- Service Config -->
-    <div id="service-config" style="display: none;">
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-cube"></i>
-            <span>Service Configuration</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-grid">
-            <div class="nats-form-row">
-              <label><i class="fa fa-tag"></i>Service Name</label>
-              <input type="text" id="node-input-serviceName" placeholder="my-service">
-            </div>
-            <div class="nats-form-row">
-              <label><i class="fa fa-code-fork"></i>Version</label>
-              <input type="text" id="node-input-serviceVersion" placeholder="1.0.0">
-            </div>
-          </div>
-          <div class="nats-form-row">
-            <label><i class="fa fa-info-circle"></i>Description</label>
-            <input type="text" id="node-input-serviceDescription" placeholder="Service description">
-          </div>
-        </div>
-      </div>
-      
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-plug"></i>
-            <span>Endpoint Configuration</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-form-row">
-            <label><i class="fa fa-plug"></i>Endpoint Name</label>
-            <input type="text" id="node-input-endpoint" placeholder="process">
-          </div>
-          <div class="nats-form-row">
-            <label><i class="fa fa-paper-plane"></i>Subject (optional)</label>
-            <input type="text" id="node-input-endpointSubject" placeholder="my-service.process">
-            <div class="nats-hint">Default: serviceName.endpoint</div>
-          </div>
-          <div class="nats-form-row">
-            <label><i class="fa fa-users"></i>Queue Group</label>
-            <input type="text" id="node-input-queueGroup" placeholder="my-service">
-          </div>
-          <div class="nats-form-row">
-            <label><i class="fa fa-code"></i>Metadata (JSON)</label>
-            <input type="text" id="node-input-metadata" placeholder='{"region": "eu", "env": "prod"}'>
-          </div>
-          <div class="nats-checkbox-row">
-            <input type="checkbox" id="node-input-autoStart" checked>
-            <label for="node-input-autoStart"><i class="fa fa-play"></i>Auto-Start on Deploy</label>
-          </div>
-        </div>
-      </div>
+    <div class="form-row">
+      <label for="node-input-serviceVersion"><i class="fa fa-code-fork"></i> Version</label>
+      <input type="text" id="node-input-serviceVersion" placeholder="1.0.0" style="width:70%">
     </div>
-    
-    <!-- NATS Stats Config -->
-    <div id="nats-stats-config" style="display: none;">
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-bar-chart"></i>
-            <span>NATS Statistics</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-form-row">
-            <label><i class="fa fa-bar-chart"></i>Stats Type</label>
-            <select id="node-input-statsType">
-              <option value="server">Server Stats</option>
-              <option value="jetstream">JetStream Stats</option>
-              <option value="connections">Connection Stats</option>
-              <option value="all">All Stats</option>
-            </select>
-            <div class="nats-hint">
-              Server: Messages & bytes | JetStream: Streams & storage | Connections: Active connections
-            </div>
-          </div>
-        </div>
-      </div>
+    <div class="form-row">
+      <label for="node-input-serviceDescription"><i class="fa fa-info-circle"></i> Description</label>
+      <input type="text" id="node-input-serviceDescription" placeholder="Service description" style="width:70%">
     </div>
-    
-    <!-- Health Config -->
-    <div id="health-config" style="display: none;">
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-heartbeat"></i>
-            <span>Health Check Settings</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-checkbox-row">
-            <input type="checkbox" id="node-input-checkOnStart" checked>
-            <label for="node-input-checkOnStart"><i class="fa fa-play"></i>Check on Start</label>
-          </div>
-          <div class="nats-checkbox-row">
-            <input type="checkbox" id="node-input-periodicCheck">
-            <label for="node-input-periodicCheck"><i class="fa fa-clock-o"></i>Periodic Check</label>
-          </div>
-          <div class="nats-form-row" id="check-interval-row" style="display: none;">
-            <label><i class="fa fa-clock-o"></i>Check Interval</label>
-            <div class="nats-inline-row">
-              <input type="number" id="node-input-checkInterval" placeholder="30" min="5" max="3600">
-              <span class="nats-unit">seconds</span>
-            </div>
-          </div>
-          <div class="nats-checkbox-row">
-            <input type="checkbox" id="node-input-enableConnectivityTests" checked>
-            <label for="node-input-enableConnectivityTests"><i class="fa fa-plug"></i>Enable Connectivity Tests</label>
-          </div>
-        </div>
-      </div>
-      
-      <div class="nats-section">
-        <div class="nats-section-header">
-          <div class="nats-section-title">
-            <i class="fa fa-sliders"></i>
-            <span>Alert Thresholds</span>
-          </div>
-          <i class="fa fa-chevron-down nats-section-toggle"></i>
-        </div>
-        <div class="nats-section-content">
-          <div class="nats-grid">
-            <div class="nats-form-row">
-              <label><i class="fa fa-tachometer"></i>Latency Threshold</label>
-              <div class="nats-inline-row">
-                <input type="number" id="node-input-latencyThreshold" placeholder="100" min="10" max="1000">
-                <span class="nats-unit">ms</span>
-              </div>
-            </div>
-            <div class="nats-form-row">
-              <label><i class="fa fa-refresh"></i>Reconnect Threshold</label>
-              <input type="number" id="node-input-reconnectThreshold" placeholder="5" min="1" max="50">
-            </div>
-          </div>
-          <div class="nats-form-row">
-            <label><i class="fa fa-signal"></i>Throughput Threshold</label>
-            <div class="nats-inline-row">
-              <input type="number" id="node-input-throughputThreshold" placeholder="1000" min="100" max="10000">
-              <span class="nats-unit">msg/s</span>
-            </div>
-          </div>
-        </div>
-      </div>
+
+    <h4>Endpoint Configuration</h4>
+    <div class="form-row">
+      <label for="node-input-endpoint"><i class="fa fa-plug"></i> Endpoint Name</label>
+      <input type="text" id="node-input-endpoint" placeholder="process" style="width:70%">
     </div>
-    
+    <div class="form-row">
+      <label for="node-input-endpointSubject"><i class="fa fa-paper-plane"></i> Subject (optional)</label>
+      <input type="text" id="node-input-endpointSubject" placeholder="my-service.process" style="width:70%">
+    </div>
+    <div class="form-row form-tips">Default: serviceName.endpoint</div>
+    <div class="form-row">
+      <label for="node-input-queueGroup"><i class="fa fa-users"></i> Queue Group</label>
+      <input type="text" id="node-input-queueGroup" placeholder="my-service" style="width:70%">
+    </div>
+    <div class="form-row">
+      <label for="node-input-metadata"><i class="fa fa-code"></i> Metadata (JSON)</label>
+      <input type="text" id="node-input-metadata" placeholder='{"region": "eu", "env": "prod"}' style="width:70%">
+    </div>
+    <div class="form-row">
+      <label for="node-input-autoStart"> </label>
+      <label for="node-input-autoStart" style="width:70%">
+        <input type="checkbox" id="node-input-autoStart" style="display:inline-block; width:22px; vertical-align:top;">Auto-Start on Deploy
+      </label>
+    </div>
+  </div>
+
+  <div id="nats-stats-config" style="display: none;">
+    <h4>NATS Statistics</h4>
+    <div class="form-row">
+      <label for="node-input-statsType"><i class="fa fa-bar-chart"></i> Stats Type</label>
+      <select id="node-input-statsType" style="width:70%">
+        <option value="server">Server Stats</option>
+        <option value="jetstream">JetStream Stats</option>
+        <option value="connections">Connection Stats</option>
+        <option value="all">All Stats</option>
+      </select>
+    </div>
+    <div class="form-row form-tips">Server: messages &amp; bytes | JetStream: streams &amp; storage | Connections: active connections</div>
+  </div>
+
+  <div id="health-config" style="display: none;">
+    <h4>Health Check Settings</h4>
+    <div class="form-row">
+      <label for="node-input-checkOnStart"> </label>
+      <label for="node-input-checkOnStart" style="width:70%">
+        <input type="checkbox" id="node-input-checkOnStart" style="display:inline-block; width:22px; vertical-align:top;">Check on Start
+      </label>
+    </div>
+    <div class="form-row">
+      <label for="node-input-periodicCheck"> </label>
+      <label for="node-input-periodicCheck" style="width:70%">
+        <input type="checkbox" id="node-input-periodicCheck" style="display:inline-block; width:22px; vertical-align:top;">Periodic Check
+      </label>
+    </div>
+    <div class="form-row" id="check-interval-row" style="display: none;">
+      <label for="node-input-checkInterval"><i class="fa fa-clock-o"></i> Check Interval</label>
+      <input type="number" id="node-input-checkInterval" placeholder="30" min="5" max="3600" style="width:100px">
+      <span> seconds</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-enableConnectivityTests"> </label>
+      <label for="node-input-enableConnectivityTests" style="width:70%">
+        <input type="checkbox" id="node-input-enableConnectivityTests" style="display:inline-block; width:22px; vertical-align:top;">Enable Connectivity Tests
+      </label>
+    </div>
+
+    <h4>Alert Thresholds</h4>
+    <div class="form-row">
+      <label for="node-input-latencyThreshold"><i class="fa fa-tachometer"></i> Latency Threshold</label>
+      <input type="number" id="node-input-latencyThreshold" placeholder="100" min="10" max="1000" style="width:100px">
+      <span> ms</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-reconnectThreshold"><i class="fa fa-refresh"></i> Reconnect Threshold</label>
+      <input type="number" id="node-input-reconnectThreshold" placeholder="5" min="1" max="50" style="width:100px">
+    </div>
+    <div class="form-row">
+      <label for="node-input-throughputThreshold"><i class="fa fa-signal"></i> Throughput Threshold</label>
+      <input type="number" id="node-input-throughputThreshold" placeholder="1000" min="100" max="10000" style="width:100px">
+      <span> msg/s</span>
+    </div>
   </div>
 </script>
 
-<script type="text/x-red" data-help-name="nats-suite-service">
-  <p>NATS Service API for microservice discovery, health monitoring, and endpoints.</p>
+<script type="text/markdown" data-help-name="nats-suite-service">
+NATS Service API for microservice discovery, health monitoring, and endpoints.
 
-  <h3>Modes</h3>
-  <ul>
-    <li><strong>Discovery:</strong> Find available services</li>
-    <li><strong>Stats:</strong> Get service statistics</li>
-    <li><strong>Ping:</strong> Check service availability</li>
-    <li><strong>Service:</strong> Run a service endpoint</li>
-    <li><strong>Health:</strong> Monitor NATS server health</li>
-    <li><strong>NATS Stats:</strong> Get NATS server/JetStream statistics</li>
-  </ul>
+### Modes
 
-  <h3>Service Mode</h3>
-  <p>Process requests and respond:</p>
-  <pre>// In a function node:
+ - Discovery - find available services
+ - Stats - get service statistics
+ - Ping - check service availability
+ - Service - run a service endpoint
+ - Health - monitor NATS server health
+ - NATS Stats - get NATS server/JetStream statistics
+
+### Service Mode
+
+Process requests and respond, in a function node wired to this node's output:
+
+```javascript
 msg.respond({ result: "success" });
 // or
-msg.respondError("Error message", "ERROR_CODE");</pre>
+msg.respondError("Error message", "ERROR_CODE");
+```
 
-  <h3>Health Mode</h3>
-  <p>Outputs health status:</p>
-  <dl class="message-properties">
-    <dt>payload.status <span class="property-type">string</span></dt>
-    <dd>"healthy", "warning", or "unhealthy"</dd>
-    <dt>payload.connection <span class="property-type">object</span></dt>
-    <dd>Connection status, latency, uptime</dd>
-    <dt>payload.stats <span class="property-type">object</span></dt>
-    <dd>Messages sent/received, throughput</dd>
-    <dt>payload.alerts <span class="property-type">array</span></dt>
-    <dd>Threshold violations</dd>
-  </dl>
+### Health Mode
 
-  <h3>NATS Stats Mode</h3>
-  <p>Stats types:</p>
-  <ul>
-    <li><strong>server:</strong> Messages, bytes, reconnects</li>
-    <li><strong>jetstream:</strong> Memory, storage, API stats</li>
-    <li><strong>connections:</strong> Server info, active connections</li>
-    <li><strong>all:</strong> Combined statistics</li>
-  </ul>
+Outputs health status:
 
-  <h3>Dynamic Operations</h3>
-  <p>Send <code>msg.operation</code> to trigger:</p>
-  <ul>
-    <li><code>discover</code> - Find services</li>
-    <li><code>stats</code> - Get service stats</li>
-    <li><code>ping</code> - Ping services</li>
-    <li><code>start</code> - Start service</li>
-    <li><code>stop</code> - Stop service</li>
-    <li><code>health</code> - Run health check</li>
-    <li><code>nats-stats</code> - Get NATS statistics (use <code>msg.statsType</code>)</li>
-  </ul>
+: payload.status (string) : `"healthy"`, `"warning"`, or `"unhealthy"`
+: payload.connection (object) : connection status, latency, uptime
+: payload.stats (object) : messages sent/received, throughput
+: payload.alerts (array) : threshold violations
+
+### NATS Stats Mode
+
+Stats types:
+
+ - server - messages, bytes, reconnects
+ - jetstream - memory, storage, API stats
+ - connections - server info, active connections
+ - all - combined statistics
+
+### Dynamic Operations
+
+Send `msg.operation` to trigger:
+
+ - `discover` - find services
+ - `stats` - get service stats
+ - `ping` - ping services
+ - `start` - start service
+ - `stop` - stop service
+ - `health` - run health check
+ - `nats-stats` - get NATS statistics (use `msg.statsType`)
 </script>

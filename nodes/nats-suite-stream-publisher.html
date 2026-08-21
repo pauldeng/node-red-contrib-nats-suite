@@ -147,26 +147,21 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     .nats-section {
-      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
-      border: 1px solid #e1e4e8;
+      background: var(--red-ui-form-background);
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 8px;
       margin-bottom: 12px;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     .nats-section-header {
-      background: linear-gradient(135deg, #f1f3f5 0%, #e9ecef 100%);
+      background: var(--red-ui-secondary-background);
       padding: 10px 14px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #e1e4e8;
-      transition: background 0.2s ease;
+      border-bottom: 1px solid var(--red-ui-form-input-border-color);
       user-select: none;
-    }
-    .nats-section-header:hover {
-      background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
     }
     .nats-section-header.collapsed { border-bottom: none; }
     .nats-section-title {
@@ -175,16 +170,15 @@
       gap: 10px;
       font-weight: 600;
       font-size: 13px;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
     }
     .nats-section-title i {
       width: 18px;
       text-align: center;
-      color: #2FAF9C;
       font-size: 14px;
     }
     .nats-section-toggle {
-      color: #6c757d;
+      color: var(--red-ui-secondary-text-color);
       font-size: 11px;
     }
     .nats-section-content { padding: 14px; }
@@ -194,12 +188,11 @@
       display: block;
       font-size: 12px;
       font-weight: 500;
-      color: #495057;
+      color: var(--red-ui-form-text-color);
       margin-bottom: 5px;
     }
     .nats-form-row label i {
       margin-right: 6px;
-      color: #2FAF9C;
       width: 14px;
       text-align: center;
     }
@@ -208,22 +201,16 @@
     .nats-form-row select {
       width: 100%;
       padding: 8px 10px;
-      border: 1px solid #ced4da;
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 6px;
       font-size: 13px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      background: #fff;
+      background: var(--red-ui-form-input-background);
+      color: var(--red-ui-form-text-color);
     }
     .nats-form-row input:focus,
     .nats-form-row select:focus {
-      border-color: #2FAF9C;
-      box-shadow: 0 0 0 3px rgba(47, 175, 156, 0.15);
+      border-color: var(--red-ui-form-input-focus-color);
       outline: none;
-    }
-    .nats-hint {
-      font-size: 11px;
-      color: #6c757d;
-      margin-top: 4px;
     }
     .nats-grid {
       display: grid;
@@ -237,8 +224,8 @@
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
-      background: #d4edda;
-      color: #155724;
+      border: 1px solid var(--red-ui-border-color-success);
+      color: var(--red-ui-form-text-color);
     }
   </style>
 
@@ -291,24 +278,24 @@
         <div class="nats-form-row" id="stream-name-config">
           <label><i class="fa fa-database"></i>Stream Name</label>
           <input type="text" id="node-input-streamName" placeholder="sensor-data">
-          <div class="nats-hint">Cannot be changed after creation</div>
+          <div class="form-tips">Cannot be changed after creation</div>
         </div>
         <div class="nats-form-row" id="publish-config">
           <label><i class="fa fa-paper-plane"></i>Default Subject <span class="nats-badge">msg.subject</span></label>
           <input type="text" id="node-input-defaultSubject" placeholder="sensor.temperature">
-          <div class="nats-hint">Used when msg.subject is not provided</div>
+          <div class="form-tips">Used when msg.subject is not provided</div>
         </div>
         <div class="nats-form-row" id="create-on-init-row">
           <label>
             <input type="checkbox" id="node-input-createOnInit" style="width: auto; margin-right: 8px;">
             <i class="fa fa-plus-circle"></i>Create Stream on initialization
           </label>
-          <div class="nats-hint">Automatically create stream when node initializes</div>
+          <div class="form-tips">Automatically create stream when node initializes</div>
         </div>
         <div class="nats-form-row" id="subject-pattern-config">
           <label><i class="fa fa-filter"></i>Subject Pattern</label>
           <input type="text" id="node-input-subjectPattern" placeholder="sensor.*, data.>, orders.*">
-          <div class="nats-hint">Pattern for subjects captured by this stream. Use comma to separate multiple subjects</div>
+          <div class="form-tips">Pattern for subjects captured by this stream. Use comma to separate multiple subjects</div>
         </div>
       </div>
     </div>
@@ -331,7 +318,7 @@
               <option value="interest">Interest</option>
               <option value="workqueue">WorkQueue</option>
             </select>
-            <div class="nats-hint">Cannot be changed after creation</div>
+            <div class="form-tips">Cannot be changed after creation</div>
           </div>
           <div class="nats-form-row create-only">
             <label><i class="fa fa-hdd-o"></i>Storage</label>
@@ -339,7 +326,7 @@
               <option value="file">File</option>
               <option value="memory">Memory</option>
             </select>
-            <div class="nats-hint">Cannot be changed after creation</div>
+            <div class="form-tips">Cannot be changed after creation</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-trash"></i>Discard Policy</label>
@@ -373,37 +360,37 @@
           <div class="nats-form-row">
             <label><i class="fa fa-list-ol"></i>Max Messages</label>
             <input type="number" id="node-input-maxMessages" placeholder="-1 (unlimited)">
-            <div class="nats-hint">-1 for unlimited</div>
+            <div class="form-tips">-1 for unlimited</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-database"></i>Max Bytes</label>
             <input type="number" id="node-input-maxBytes" placeholder="-1 (unlimited)">
-            <div class="nats-hint">-1 for unlimited</div>
+            <div class="form-tips">-1 for unlimited</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-clock-o"></i>Max Age</label>
             <input type="text" id="node-input-maxAge" placeholder="24h">
-            <div class="nats-hint">e.g. 1h, 24h, 7d</div>
+            <div class="form-tips">e.g. 1h, 24h, 7d</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-window-restore"></i>Duplicate Window</label>
             <input type="text" id="node-input-duplicateWindow" placeholder="2m">
-            <div class="nats-hint">Deduplication time window</div>
+            <div class="form-tips">Deduplication time window</div>
           </div>
           <div class="nats-form-row create-only">
             <label><i class="fa fa-users"></i>Max Consumers</label>
             <input type="number" id="node-input-maxConsumers" placeholder="-1 (unlimited)">
-            <div class="nats-hint">-1 for unlimited. Cannot be changed after creation</div>
+            <div class="form-tips">-1 for unlimited. Cannot be changed after creation</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-filter"></i>Max Msgs/Subject</label>
             <input type="number" id="node-input-maxMsgsPerSubject" placeholder="-1 (unlimited)">
-            <div class="nats-hint">-1 for unlimited</div>
+            <div class="form-tips">-1 for unlimited</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-file-o"></i>Max Msg Size</label>
             <input type="number" id="node-input-maxMsgSize" placeholder="-1 (unlimited)">
-            <div class="nats-hint">Max single message size in bytes</div>
+            <div class="form-tips">Max single message size in bytes</div>
           </div>
           <div class="nats-form-row">
             <label><i class="fa fa-copy"></i>Replicas</label>
@@ -429,56 +416,56 @@
               <input type="checkbox" id="node-input-allowDirect" style="width: auto; margin-right: 8px;">
               <i class="fa fa-bolt"></i>Allow Direct Get
             </label>
-            <div class="nats-hint">Allow direct message access</div>
+            <div class="form-tips">Allow direct message access</div>
           </div>
           <div class="nats-form-row">
             <label>
               <input type="checkbox" id="node-input-mirrorDirect" style="width: auto; margin-right: 8px;">
               <i class="fa fa-clone"></i>Mirror Direct
             </label>
-            <div class="nats-hint">Allow direct access from mirror</div>
+            <div class="form-tips">Allow direct access from mirror</div>
           </div>
           <div class="nats-form-row">
             <label>
               <input type="checkbox" id="node-input-sealed" style="width: auto; margin-right: 8px;">
               <i class="fa fa-lock"></i>Sealed
             </label>
-            <div class="nats-hint">Seal stream (read-only)</div>
+            <div class="form-tips">Seal stream (read-only)</div>
           </div>
           <div class="nats-form-row create-only">
             <label>
               <input type="checkbox" id="node-input-denyDelete" style="width: auto; margin-right: 8px;">
               <i class="fa fa-ban"></i>Deny Delete
             </label>
-            <div class="nats-hint">Prevent message deletion. Cannot be changed after creation</div>
+            <div class="form-tips">Prevent message deletion. Cannot be changed after creation</div>
           </div>
           <div class="nats-form-row create-only">
             <label>
               <input type="checkbox" id="node-input-denyPurge" style="width: auto; margin-right: 8px;">
               <i class="fa fa-ban"></i>Deny Purge
             </label>
-            <div class="nats-hint">Prevent stream purging. Cannot be changed after creation</div>
+            <div class="form-tips">Prevent stream purging. Cannot be changed after creation</div>
           </div>
           <div class="nats-form-row">
             <label>
               <input type="checkbox" id="node-input-allowRollupHdrs" style="width: auto; margin-right: 8px;">
               <i class="fa fa-compress"></i>Allow Rollup Headers
             </label>
-            <div class="nats-hint">Enable header rollups</div>
+            <div class="form-tips">Enable header rollups</div>
           </div>
           <div class="nats-form-row create-only">
             <label>
               <input type="checkbox" id="node-input-allowMsgTtl" style="width: auto; margin-right: 8px;">
               <i class="fa fa-hourglass-half"></i>Allow Message TTL
             </label>
-            <div class="nats-hint">Allow per-message TTL. Can only be enabled at creation</div>
+            <div class="form-tips">Allow per-message TTL. Can only be enabled at creation</div>
           </div>
           <div class="nats-form-row create-only">
             <label>
               <input type="checkbox" id="node-input-allowMsgSchedules" style="width: auto; margin-right: 8px;">
               <i class="fa fa-clock-o"></i>Allow Message Schedules
             </label>
-            <div class="nats-hint">Enable delayed delivery. Cannot be disabled after enabling</div>
+            <div class="form-tips">Enable delayed delivery. Cannot be disabled after enabling</div>
           </div>
         </div>
       </div>
@@ -487,167 +474,165 @@
   </div>
 </script>
 
-<script type="text/x-red" data-help-name="nats-suite-stream-publisher">
-        <p>Publishes messages to NATS JetStream with persistence and acknowledgment, and manages JetStream streams.</p>
+<script type="text/markdown" data-help-name="nats-suite-stream-publisher">
+Publishes messages to NATS JetStream with persistence and acknowledgment, and manages JetStream streams.
 
-        <h3>Operations</h3>
-        <p>This node supports multiple operations for stream management and message publishing:</p>
+### Operations
 
-        <h4>Publish Messages (default)</h4>
-        <p>Publishes messages to a JetStream stream with persistence and acknowledgment.</p>
-        <p><strong>Create Stream on initialization</strong>: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.</p>
+This node supports multiple operations for stream management and message publishing:
 
-        <h4>Create Stream</h4>
-        <p>Creates a new JetStream stream with the configured settings. The node will display <strong>"stream {name} created"</strong> for 2 seconds upon successful creation, then return to showing the connection state.</p>
+#### Publish Messages (default)
 
-        <h4>Update Stream</h4>
-        <p>Updates an existing stream's configuration. Can be triggered via node configuration or by sending a message with <code>msg.operation = "update"</code>.</p>
+Publishes messages to a JetStream stream with persistence and acknowledgment.
 
-        <h4>Update Subjects Only</h4>
-        <p>Updates only the subject patterns for an existing stream without changing other settings.</p>
+**Create Stream on initialization**: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.
 
-        <h4>Stream Info</h4>
-        <p>Retrieves detailed information about a stream including configuration, state, and statistics.</p>
+#### Create Stream
 
-        <h4>Delete Stream</h4>
-        <p>Permanently deletes a stream and all its messages.</p>
+Creates a new JetStream stream with the configured settings. The node will display **"stream {name} created"** for 2 seconds upon successful creation, then return to showing the connection state.
 
-        <h4>Purge Stream</h4>
-        <p>Removes all messages from a stream while keeping the stream itself.</p>
+#### Update Stream
 
-        <h4>List Streams</h4>
-        <p>Lists all available streams in the JetStream server.</p>
+Updates an existing stream's configuration. Can be triggered via node configuration or by sending a message with `msg.operation = "update"`.
 
-        <h3>Inputs (Publish)</h3>
-        <dl class="message-properties">
-          <dt>payload <span class="property-type">any</span></dt>
-          <dd>Data to publish to the stream</dd>
-          <dt class="optional">subject <span class="property-type">string</span></dt>
-          <dd>Target subject (overrides default subject configuration)</dd>
-          <dt class="optional">headers <span class="property-type">object</span></dt>
-          <dd>Message headers to attach</dd>
-          <dt class="optional">_msgID <span class="property-type">string</span></dt>
-          <dd>Optional message ID for deduplication within the duplicate window</dd>
-          <dt class="optional">options <span class="property-type">object</span></dt>
-          <dd>Native <code>JetStreamPublishOptions</code>, including timeout, retries, expect, ttl, schedule, and cancelSchedule</dd>
-          <dt class="optional">schedule <span class="property-type">object</span></dt>
-          <dd>Convenience alias for <code>msg.options.schedule</code></dd>
-          <dt class="optional">cancelSchedule <span class="property-type">object</span></dt>
-          <dd>Convenience alias for <code>msg.options.cancelSchedule</code></dd>
-        </dl>
+#### Update Subjects Only
 
-        <h3>Inputs (Stream Operations)</h3>
-        <dl class="message-properties">
-          <dt class="optional">operation <span class="property-type">string</span></dt>
-          <dd>Operation to perform: "create", "update", "update-subjects", "info", "delete", "purge", "list"</dd>
-          <dt class="optional">stream <span class="property-type">string</span></dt>
-          <dd>Stream name (overrides node configuration)</dd>
-          <dt class="optional">payload <span class="property-type">object</span></dt>
-          <dd>For create/update operations: full stream configuration in NATS native format. See <a href="https://docs.nats.io/nats-concepts/jetstream/streams" target="_blank">NATS Stream Configuration</a></dd>
-          <dt class="optional">subjects <span class="property-type">string[] | string</span></dt>
-          <dd>Subject patterns for the stream (array or comma-separated string)</dd>
-          <dt class="optional">retention <span class="property-type">string</span></dt>
-          <dd>Retention policy: "limits", "interest", or "workqueue"</dd>
-          <dt class="optional">maxMessages <span class="property-type">number</span></dt>
-          <dd>Maximum number of messages (-1 for unlimited)</dd>
-          <dt class="optional">maxBytes <span class="property-type">number</span></dt>
-          <dd>Maximum total bytes (-1 for unlimited)</dd>
-          <dt class="optional">maxAge <span class="property-type">string</span></dt>
-          <dd>Maximum message age (e.g., "24h", "7d")</dd>
-        </dl>
+Updates only the subject patterns for an existing stream without changing other settings.
 
-        <h3>Outputs (Publish)</h3>
-        <dl class="message-properties">
-          <dt>sequence <span class="property-type">number</span></dt>
-          <dd>Message sequence number in the stream</dd>
-          <dt>stream <span class="property-type">string</span></dt>
-          <dd>Stream name where message was published</dd>
-          <dt>published <span class="property-type">boolean</span></dt>
-          <dd>True if published successfully, false on error</dd>
-          <dt>subject <span class="property-type">string</span></dt>
-          <dd>Subject where message was published</dd>
-          <dt class="optional">_duplicate <span class="property-type">boolean</span></dt>
-          <dd>True if message was detected as a duplicate</dd>
-        </dl>
+#### Stream Info
 
-        <h3>Outputs (Stream Operations)</h3>
-        <dl class="message-properties">
-          <dt>payload <span class="property-type">object</span></dt>
-          <dd>Operation result containing success status, stream name, and relevant data</dd>
-          <dt>operation <span class="property-type">string</span></dt>
-          <dd>The operation that was performed</dd>
-          <dt class="optional">config <span class="property-type">object</span></dt>
-          <dd>Stream configuration (for info, create, update operations)</dd>
-          <dt class="optional">state <span class="property-type">object</span></dt>
-          <dd>Stream state including message count, bytes, etc. (for info operation)</dd>
-        </dl>
+Retrieves detailed information about a stream including configuration, state, and statistics.
 
-        <h3>Stream Configuration</h3>
-        <p>Streams can be configured with various settings (only visible when "Create Stream on initialization" is enabled in Publish mode):</p>
-        <ul>
-          <li><strong>Stream Name</strong>: Unique identifier for the stream</li>
-          <li><strong>Subject Pattern</strong>: Wildcards pattern for subjects captured (e.g., "sensor.*")</li>
-          <li><strong>Retention Policy</strong>: How messages are retained (limits/interest/workqueue)</li>
-          <li><strong>Storage</strong>: File-based (persistent) or memory-based (fast but volatile)</li>
-          <li><strong>Limits</strong>: Max messages, bytes, age, and per-subject limits</li>
-          <li><strong>Deduplication</strong>: Time window for detecting duplicate messages</li>
-          <li><strong>Replicas</strong>: Number of stream replicas for high availability</li>
-        </ul>
+#### Delete Stream
 
-        <h3>Node Status</h3>
-        <p>The node displays its current state:</p>
-        <ul>
-          <li><strong>connected</strong> (green): Connected to NATS server</li>
-          <li><strong>connecting</strong> (yellow): Attempting to connect</li>
-          <li><strong>disconnected</strong> (red): Not connected</li>
-          <li><strong>stream {name} created</strong> (green, 2 seconds): Stream successfully created</li>
-        </ul>
+Permanently deletes a stream and all its messages.
 
-        <h3>Examples</h3>
+#### Purge Stream
 
-        <h4>Publish Message</h4>
-        <pre>msg.subject = "sensor.temperature";
-      msg.payload = { value: 22.5, unit: "C" };
-      return msg;</pre>
+Removes all messages from a stream while keeping the stream itself.
 
-        <h4>Create Stream Programmatically (Simple)</h4>
-        <pre>msg.operation = "create";
-    msg.stream = "my-stream";
-    msg.subjects = ["data.>"];
-    msg.retention = "limits";
-    msg.maxMessages = 1000;
-    msg.maxAge = "24h";
-    return msg;</pre>
+#### List Streams
 
-        <h4>Create Stream Programmatically (Native NATS Format)</h4>
-        <pre>msg.operation = "create";
-    msg.payload = {
-        name: "my-stream",
-        subjects: ["data.>"],
-        retention: "limits",
-        max_msgs: 1000,
-        max_age: 86400000000000,  // 24h in nanoseconds
-        storage: "file"
-    };
-    return msg;</pre>
+Lists all available streams in the JetStream server.
 
-        <h4>Get Stream Info</h4>
-        <pre>msg.operation = "info";
-      msg.stream = "my-stream";
-      return msg;</pre>
+### Inputs (Publish)
 
-        <h4>Schedule a Message</h4>
-        <pre>msg.subject = "schedules.orders." + msg._msgid;
-  msg.schedule = {
-    specification: { at: new Date(Date.now() + 30000).toISOString() },
-    target: "orders"
-  };
-  return msg;</pre>
+: payload (any) : Data to publish to the stream
+: subject (string, optional) : Target subject (overrides default subject configuration)
+: headers (object, optional) : Message headers to attach
+: _msgID (string, optional) : Optional message ID for deduplication within the duplicate window
+: options (object, optional) : Native `JetStreamPublishOptions`, including timeout, retries, expect, ttl, schedule, and cancelSchedule
+: schedule (object, optional) : Convenience alias for `msg.options.schedule`
+: cancelSchedule (object, optional) : Convenience alias for `msg.options.cancelSchedule`
 
-        <h3>Details</h3>
-        <p>This node provides comprehensive JetStream stream management alongside message publishing. When publishing, messages receive acknowledgments and sequence numbers. The stream is automatically created on startup if it doesn't exist, with configuration from the node settings.</p>
+### Inputs (Stream Operations)
 
-        <p>For advanced use cases, stream operations can be performed programmatically by setting <code>msg.operation</code> to the desired action. Stream configurations can be provided either as individual message properties or as a complete NATS-native configuration object in <code>msg.payload</code>.</p>
+: operation (string, optional) : Operation to perform: "create", "update", "update-subjects", "info", "delete", "purge", "list"
+: stream (string, optional) : Stream name (overrides node configuration)
+: payload (object, optional) : For create/update operations: full stream configuration in NATS native format. See [NATS Stream Configuration](https://docs.nats.io/nats-concepts/jetstream/streams)
+: subjects (string[] | string, optional) : Subject patterns for the stream (array or comma-separated string)
+: retention (string, optional) : Retention policy: "limits", "interest", or "workqueue"
+: maxMessages (number, optional) : Maximum number of messages (-1 for unlimited)
+: maxBytes (number, optional) : Maximum total bytes (-1 for unlimited)
+: maxAge (string, optional) : Maximum message age (e.g., "24h", "7d")
 
-        <p>For more information about NATS JetStream stream configuration, see the <a href="https://docs.nats.io/nats-concepts/jetstream/streams" target="_blank">NATS JetStream Streams Documentation</a>.</p>
+### Outputs (Publish)
+
+: sequence (number) : Message sequence number in the stream
+: stream (string) : Stream name where message was published
+: published (boolean) : True if published successfully, false on error
+: subject (string) : Subject where message was published
+: _duplicate (boolean, optional) : True if message was detected as a duplicate
+
+### Outputs (Stream Operations)
+
+: payload (object) : Operation result containing success status, stream name, and relevant data
+: operation (string) : The operation that was performed
+: config (object, optional) : Stream configuration (for info, create, update operations)
+: state (object, optional) : Stream state including message count, bytes, etc. (for info operation)
+
+### Stream Configuration
+
+Streams can be configured with various settings (only visible when "Create Stream on initialization" is enabled in Publish mode):
+
+ - **Stream Name**: Unique identifier for the stream
+ - **Subject Pattern**: Wildcards pattern for subjects captured (e.g., "sensor.*")
+ - **Retention Policy**: How messages are retained (limits/interest/workqueue)
+ - **Storage**: File-based (persistent) or memory-based (fast but volatile)
+ - **Limits**: Max messages, bytes, age, and per-subject limits
+ - **Deduplication**: Time window for detecting duplicate messages
+ - **Replicas**: Number of stream replicas for high availability
+
+### Node Status
+
+The node displays its current state:
+
+ - **connected** (green): Connected to NATS server
+ - **connecting** (yellow): Attempting to connect
+ - **disconnected** (red): Not connected
+ - **stream {name} created** (green, 2 seconds): Stream successfully created
+
+### Examples
+
+#### Publish Message
+
+```
+msg.subject = "sensor.temperature";
+msg.payload = { value: 22.5, unit: "C" };
+return msg;
+```
+
+#### Create Stream Programmatically (Simple)
+
+```
+msg.operation = "create";
+msg.stream = "my-stream";
+msg.subjects = ["data.>"];
+msg.retention = "limits";
+msg.maxMessages = 1000;
+msg.maxAge = "24h";
+return msg;
+```
+
+#### Create Stream Programmatically (Native NATS Format)
+
+```
+msg.operation = "create";
+msg.payload = {
+    name: "my-stream",
+    subjects: ["data.>"],
+    retention: "limits",
+    max_msgs: 1000,
+    max_age: 86400000000000,  // 24h in nanoseconds
+    storage: "file"
+};
+return msg;
+```
+
+#### Get Stream Info
+
+```
+msg.operation = "info";
+msg.stream = "my-stream";
+return msg;
+```
+
+#### Schedule a Message
+
+```
+msg.subject = "schedules.orders." + msg._msgid;
+msg.schedule = {
+  specification: { at: new Date(Date.now() + 30000).toISOString() },
+  target: "orders"
+};
+return msg;
+```
+
+### Details
+
+This node provides comprehensive JetStream stream management alongside message publishing. When publishing, messages receive acknowledgments and sequence numbers. The stream is automatically created on startup if it doesn't exist, with configuration from the node settings.
+
+For advanced use cases, stream operations can be performed programmatically by setting `msg.operation` to the desired action. Stream configurations can be provided either as individual message properties or as a complete NATS-native configuration object in `msg.payload`.
+
+For more information about NATS JetStream stream configuration, see the [NATS JetStream Streams Documentation](https://docs.nats.io/nats-concepts/jetstream/streams).
 </script>

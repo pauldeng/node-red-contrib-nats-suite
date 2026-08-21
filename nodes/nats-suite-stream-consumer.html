@@ -78,14 +78,14 @@
           $('#idle-heartbeat-row').slideDown(200);
           // Enable flow control checkbox for push consumers
           $('#node-input-flowControl').prop('disabled', false);
-          $('#flow-control-row label').css('color', '');
+          $('#flow-control-row label').removeClass('nats-label-disabled');
         } else {
           $('#idle-heartbeat-row').slideUp(200);
           // Disable and uncheck flow control for pull consumers
           $('#node-input-flowControl')
             .prop('checked', false)
             .prop('disabled', true);
-          $('#flow-control-row label').css('color', '#aaa');
+          $('#flow-control-row label').addClass('nats-label-disabled');
         }
       });
 
@@ -106,26 +106,21 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     .nats-section {
-      background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
-      border: 1px solid #e1e4e8;
+      background: var(--red-ui-form-background);
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 8px;
       margin-bottom: 12px;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     .nats-section-header {
-      background: linear-gradient(135deg, #f1f3f5 0%, #e9ecef 100%);
+      background: var(--red-ui-secondary-background);
       padding: 10px 14px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #e1e4e8;
-      transition: background 0.2s ease;
+      border-bottom: 1px solid var(--red-ui-form-input-border-color);
       user-select: none;
-    }
-    .nats-section-header:hover {
-      background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
     }
     .nats-section-header.collapsed { border-bottom: none; }
     .nats-section-title {
@@ -134,16 +129,15 @@
       gap: 10px;
       font-weight: 600;
       font-size: 13px;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
     }
     .nats-section-title i {
       width: 18px;
       text-align: center;
-      color: #2FAF9C;
       font-size: 14px;
     }
     .nats-section-toggle {
-      color: #6c757d;
+      color: var(--red-ui-secondary-text-color);
       font-size: 11px;
     }
     .nats-section-content { padding: 14px; }
@@ -153,12 +147,11 @@
       display: block;
       font-size: 12px;
       font-weight: 500;
-      color: #495057;
+      color: var(--red-ui-form-text-color);
       margin-bottom: 5px;
     }
     .nats-form-row label i {
       margin-right: 6px;
-      color: #2FAF9C;
       width: 14px;
       text-align: center;
     }
@@ -167,22 +160,16 @@
     .nats-form-row select {
       width: 100%;
       padding: 8px 10px;
-      border: 1px solid #ced4da;
+      border: 1px solid var(--red-ui-form-input-border-color);
       border-radius: 6px;
       font-size: 13px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      background: #fff;
+      background: var(--red-ui-form-input-background);
+      color: var(--red-ui-form-text-color);
     }
     .nats-form-row input:focus,
     .nats-form-row select:focus {
-      border-color: #2FAF9C;
-      box-shadow: 0 0 0 3px rgba(47, 175, 156, 0.15);
+      border-color: var(--red-ui-form-input-focus-color);
       outline: none;
-    }
-    .nats-hint {
-      font-size: 11px;
-      color: #6c757d;
-      margin-top: 4px;
     }
     .nats-grid {
       display: grid;
@@ -198,19 +185,20 @@
     .nats-checkbox-row input[type="checkbox"] {
       width: 16px;
       height: 16px;
-      accent-color: #2FAF9C;
       cursor: pointer;
     }
     .nats-checkbox-row label {
       margin: 0;
       font-size: 13px;
       font-weight: 500;
-      color: #2c3e50;
+      color: var(--red-ui-form-text-color);
       cursor: pointer;
     }
     .nats-checkbox-row label i {
       margin-right: 8px;
-      color: #2FAF9C;
+    }
+    .nats-checkbox-row label.nats-label-disabled {
+      color: var(--red-ui-form-placeholder-color);
     }
   </style>
 
@@ -300,7 +288,7 @@
           <div class="nats-form-row" id="idle-heartbeat-row" style="display: none;">
             <label><i class="fa fa-heartbeat"></i>Idle Heartbeat</label>
             <input type="text" id="node-input-idleHeartbeat" placeholder="5s">
-            <div class="nats-hint">Required for push-based consumers</div>
+            <div class="form-tips">Required for push-based consumers</div>
           </div>
         </div>
       </div>
@@ -371,7 +359,7 @@
             <option value="string">String (no parsing)</option>
             <option value="buffer">Buffer (binary)</option>
           </select>
-          <div class="nats-hint">
+          <div class="form-tips">
             Auto: Try JSON first, fallback to string | Buffer: For binary data
           </div>
         </div>
@@ -385,36 +373,29 @@
   </div>
 </script>
 
-<script type="text/x-red" data-help-name="nats-suite-stream-consumer">
-    <p>Consumes messages from NATS JetStream with acknowledgment control.</p>
+<script type="text/markdown" data-help-name="nats-suite-stream-consumer">
+Consumes messages from NATS JetStream with acknowledgment control.
 
-    <h3>Inputs</h3>
-    <dl class="message-properties">
-      <dt class="optional">config <span class="property-type">object</span></dt>
-      <dd>Native <code>ConsumerConfig</code> for create/add operations</dd>
-      <dt class="optional">options <span class="property-type">object</span></dt>
-      <dd>Native create, stream info/purge, or fetch options for the selected operation</dd>
-      <dt class="optional">until <span class="property-type">string</span></dt>
-      <dd>ISO date/time for the server-side pause operation; omit to pause indefinitely</dd>
-    </dl>
+### Inputs
 
-    <h3>Outputs</h3>
-    <dl class="message-properties">
-      <dt>payload <span class="property-type">any</span></dt>
-      <dd>Message payload</dd>
-      <dt>sequence <span class="property-type">number</span></dt>
-      <dd>Message sequence number</dd>
-      <dt>ack <span class="property-type">function</span></dt>
-      <dd>Acknowledge message</dd>
-      <dt>nak <span class="property-type">function</span></dt>
-      <dd>Negative acknowledge (retry)</dd>
-      <dt>term <span class="property-type">function</span></dt>
-      <dd>Terminate (no retry)</dd>
-    </dl>
+: config (object, optional) : Native `ConsumerConfig` for create/add operations
+: options (object, optional) : Native create, stream info/purge, or fetch options for the selected operation
+: until (string, optional) : ISO date/time for the server-side pause operation; omit to pause indefinitely
 
-    <h3>Acknowledgment</h3>
-    <pre>// In a function node:
-  msg.ack();   // Success
-  msg.nak();   // Retry later
-  msg.term();  // Don't retry</pre>
+### Outputs
+
+: payload (any) : Message payload
+: sequence (number) : Message sequence number
+: ack (function) : Acknowledge message
+: nak (function) : Negative acknowledge (retry)
+: term (function) : Terminate (no retry)
+
+### Acknowledgment
+
+```
+// In a function node:
+msg.ack();   // Success
+msg.nak();   // Retry later
+msg.term();  // Don't retry
+```
 </script>
