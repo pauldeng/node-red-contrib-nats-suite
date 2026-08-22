@@ -1686,7 +1686,7 @@
         "autoStart": true,
         "debug": true,
         "binarySource": "custom",
-        "customBinaryPath": "/data/bin/nats-server-v2.12.2-linux-amd64",
+        "customBinaryPath": "/data/bin/nats-server",
         "configSource": "file",
         "configFilePath": "",
         "enableMqtt": true,
