@@ -7,6 +7,7 @@
 // process with the modular NATS transport declared as a dependency.
 
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 const { connect } = require('@nats-io/transport-node');
 
@@ -74,15 +75,18 @@ async function waitForAdminApi(timeoutMs = 30000) {
 async function ensureStackUp() {
   if (!dockerAvailable()) return 'Docker is not available on this host';
   try {
+    fs.mkdirSync(path.join(REPO_ROOT, 'bin'), { recursive: true });
     execFileSync('docker', ['compose', 'up', '-d', 'nats-server', 'nodered'], {
       cwd: REPO_ROOT,
       stdio: 'ignore',
     });
+    const natsBinaryPath = path.join(REPO_ROOT, 'bin', 'nats-server');
     execFileSync('docker', [
       'cp',
       'nats-server-dev:/nats-server',
-      path.join(REPO_ROOT, 'bin', 'nats-server'),
+      natsBinaryPath,
     ]);
+    fs.chmodSync(natsBinaryPath, 0o755);
   } catch (err) {
     throw new Error(`docker compose up failed: ${err.message}`, { cause: err });
   }
