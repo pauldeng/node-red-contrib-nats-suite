@@ -13,7 +13,7 @@ A comprehensive Node-RED module for NATS (NATS Messaging System) with support fo
 
 - **Current version**: `1.0.0`
 - **Stability**: APIs and node options may still change between minor versions.
-- **Requires**: Node-RED `>= 5.0.0`, Node.js `>= 22.9.0`, NATS Server `>= 2.14` (JetStream enabled for JetStream/KV/Object Store features).
+- **Requires**: Node-RED `>= 5.0.0`, Node.js `>= 22.13.0`, NATS Server `>= 2.14` (JetStream enabled for JetStream/KV/Object Store features).
 - Automated tests are in `test/` (`npm test` against the Docker stack).
 
 > **Server Manager credential migration:** authentication passwords, tokens, and Leaf Node passwords now use Node-RED's encrypted credential store. After upgrading, re-enter these values in each Server Manager node; old plaintext flow properties are ignored.
@@ -263,7 +263,7 @@ msg.payload.command = 'toggle'; // Toggle start/stop
 ## Requirements
 
 - Node-RED >= 5.0.0
-- Node.js >= 22.9.0
+- Node.js >= 22.13.0
 - NATS Server (local, remote or Leaf Node)
 
 ---

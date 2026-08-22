@@ -71,7 +71,7 @@
     "@nats-io/transport-node": "3.4.0"
   },
   "engines": {
-    "node": ">=22.9.0"
+    "node": ">=22.13.0"
   },
   "repository": {
     "type": "git",
@@ -82,8 +82,8 @@
     "url": "https://github.com/pauldeng/node-red-contrib-nats-suite/issues"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
-    "eslint": "^9.39.5",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.11.0",
     "prettier": "^3.9.6"

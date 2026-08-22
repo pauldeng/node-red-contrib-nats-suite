@@ -2,7 +2,7 @@
 
 ### 1.0.0 – First public release as `@pauldeng/node-red-contrib-nats-suite`
 
-First npm publication of this fork. Modular `@nats-io/*` 3.4.0 client; Node-RED `>= 5.0` and Node.js `>= 22.9`. Maintained by Paul Deng at [github.com/pauldeng/node-red-contrib-nats-suite](https://github.com/pauldeng/node-red-contrib-nats-suite). Originally created by blanpa. Later releases publish from GitHub Actions via npm trusted publishing (OIDC + provenance).
+First npm publication of this fork. Modular `@nats-io/*` 3.4.0 client; Node-RED `>= 5.0` and Node.js `>= 22.13`. Maintained by Paul Deng at [github.com/pauldeng/node-red-contrib-nats-suite](https://github.com/pauldeng/node-red-contrib-nats-suite). Originally created by blanpa. Later releases publish from GitHub Actions via npm trusted publishing (OIDC + provenance).
 
 ---
 
