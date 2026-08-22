@@ -590,13 +590,7 @@ test(
     const inj = `${id}inj`;
     const dbg = `${id}dbg`;
 
-    const publisher = streamPublisherNode(
-      spub,
-      srv,
-      streamName,
-      subject,
-      dbg
-    );
+    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
     publisher.subjectPattern = [subject, configTarget, realTarget].join(',');
     publisher.storage = 'memory';
     publisher.allowMsgSchedules = true;
@@ -718,13 +712,7 @@ test(
     const inj = `${id}inj`;
     const dbg = `${id}dbg`;
 
-    const publisher = streamPublisherNode(
-      spub,
-      srv,
-      streamName,
-      subject,
-      dbg
-    );
+    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
     publisher.subjectPattern = [subject, targetSubject].join(',');
     publisher.storage = 'memory';
     publisher.allowMsgSchedules = true;
@@ -836,9 +824,15 @@ test('stream-publisher: server-level enableTracing makes a JetStream publish() e
     await triggerInject(inj);
     const [trace, pubAck] = await Promise.all([traceEvent, published]);
 
-    assert.equal(pubAck.published, true, 'the real JetStream publish must still succeed under tracing');
+    assert.equal(
+      pubAck.published,
+      true,
+      'the real JetStream publish must still succeed under tracing'
+    );
     const traceJson = JSON.parse(trace);
-    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [
+      traceSubject,
+    ]);
   } finally {
     if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
@@ -867,7 +861,11 @@ test('stream-publisher: enableTracing off (the default) never emits a trace even
       // Tracing is a connection-level-only switch (NATS-3.4-GAP-PLAN.md
       // decision 2) - a msg.options passthrough field of the same name must
       // NOT be treated as a per-message trace override.
-      { p: 'options', v: JSON.stringify({ traceDestination: traceSubject }), vt: 'json' },
+      {
+        p: 'options',
+        v: JSON.stringify({ traceDestination: traceSubject }),
+        vt: 'json',
+      },
     ]),
     debugNode(dbg),
   ];
@@ -885,7 +883,11 @@ test('stream-publisher: enableTracing off (the default) never emits a trace even
     const published = comms.waitForDebug(dbg, 8000);
     await triggerInject(inj);
 
-    await assert.rejects(noTrace, /Timed out/, 'no trace event should be emitted when connection-level tracing is off');
+    await assert.rejects(
+      noTrace,
+      /Timed out/,
+      'no trace event should be emitted when connection-level tracing is off'
+    );
     const pubAck = await published;
     assert.equal(pubAck.published, true);
   } finally {
@@ -1022,150 +1024,140 @@ test('jwtAuthenticator(jwt, seed): both arguments are honored (bug 2)', () => {
 // flag is a parallel change (Agent B, nats-suite-stream-consumer.js) and is
 // tested separately there.
 
-test(
-  'stream-publisher: allowDirect on create actually sets allow_direct on the real stream',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: allowDirect on create actually sets allow_direct on the real stream', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('directget-create-');
-    const streamName = `STREAM_${id}`;
-    const subject = `test.jetstream.directget.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
+  const id = uid('directget-create-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.directget.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
 
-    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
-    publisher.storage = 'memory';
-    publisher.allowDirect = true;
+  const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+  publisher.storage = 'memory';
+  publisher.allowDirect = true;
 
-    const nodes = [serverNode(srv), publisher, debugNode(dbg)];
+  const nodes = [serverNode(srv), publisher, debugNode(dbg)];
 
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
 
-      const jsm = await jetstreamManager(directNc);
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.config.allow_direct,
-        true,
-        'allowDirect on the node must produce allow_direct: true on the real stream, not just sit unused in the editor'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
+    const jsm = await jetstreamManager(directNc);
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.config.allow_direct,
+      true,
+      'allowDirect on the node must produce allow_direct: true on the real stream, not just sit unused in the editor'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
+});
 
-test(
-  'stream-publisher: "update" preserves an existing allow_direct: true when neither msg nor config specify it',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: "update" preserves an existing allow_direct: true when neither msg nor config specify it', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('directget-update-');
-    const streamName = `STREAM_${id}`;
-    const subject = `test.jetstream.directget.${id}`;
-    const srv = `${id}srv`;
-    const spubCreate = `${id}spubcreate`;
-    const spubUpdate = `${id}spubupdate`;
-    const injUpdate = `${id}injupdate`;
-    const dbg = `${id}dbg`;
+  const id = uid('directget-update-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.directget.${id}`;
+  const srv = `${id}srv`;
+  const spubCreate = `${id}spubcreate`;
+  const spubUpdate = `${id}spubupdate`;
+  const injUpdate = `${id}injupdate`;
+  const dbg = `${id}dbg`;
 
-    // Creates the stream with allow_direct: true.
-    const creator = streamPublisherNode(
+  // Creates the stream with allow_direct: true.
+  const creator = streamPublisherNode(
+    spubCreate,
+    srv,
+    streamName,
+    subject,
+    dbg
+  );
+  creator.storage = 'memory';
+  creator.allowDirect = true;
+
+  // A second node targeting the same stream, deliberately NOT setting
+  // allowDirect at all (config.allowDirect stays undefined, not false) -
+  // proves the update path falls through to currentStream.config.allow_direct
+  // rather than defaulting to false and silently disabling it.
+  const updater = streamPublisherNode(
+    spubUpdate,
+    srv,
+    streamName,
+    subject,
+    dbg
+  );
+  updater.storage = 'memory';
+  updater.operation = 'update';
+  updater.createOnInit = false;
+
+  const nodes = [
+    serverNode(srv),
+    creator,
+    updater,
+    injectNode(injUpdate, spubUpdate, [
+      { p: 'operation', v: 'update', vt: 'str' },
+    ]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const creatorReady = comms.waitForStatus(
       spubCreate,
-      srv,
-      streamName,
-      subject,
-      dbg
+      d => d.fill === 'green',
+      15000
     );
-    creator.storage = 'memory';
-    creator.allowDirect = true;
-
-    // A second node targeting the same stream, deliberately NOT setting
-    // allowDirect at all (config.allowDirect stays undefined, not false) -
-    // proves the update path falls through to currentStream.config.allow_direct
-    // rather than defaulting to false and silently disabling it.
-    const updater = streamPublisherNode(
+    const updaterReady = comms.waitForStatus(
       spubUpdate,
-      srv,
-      streamName,
-      subject,
-      dbg
+      d => d.fill === 'green',
+      15000
     );
-    updater.storage = 'memory';
-    updater.operation = 'update';
-    updater.createOnInit = false;
+    flowId = await deployFlow(nodes);
+    await creatorReady;
+    await updaterReady;
 
-    const nodes = [
-      serverNode(srv),
-      creator,
-      updater,
-      injectNode(injUpdate, spubUpdate, [
-        { p: 'operation', v: 'update', vt: 'str' },
-      ]),
-      debugNode(dbg),
-    ];
+    const jsm = await jetstreamManager(directNc);
+    const beforeUpdate = await jsm.streams.info(streamName);
+    assert.equal(
+      beforeUpdate.config.allow_direct,
+      true,
+      'precondition: stream must start with allow_direct: true'
+    );
 
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const creatorReady = comms.waitForStatus(
-        spubCreate,
-        d => d.fill === 'green',
-        15000
-      );
-      const updaterReady = comms.waitForStatus(
-        spubUpdate,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await creatorReady;
-      await updaterReady;
+    const updated = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injUpdate);
+    const updateMsg = await updated;
+    assert.equal(updateMsg.payload.operation, 'update');
+    assert.equal(updateMsg.payload.success, true);
 
-      const jsm = await jetstreamManager(directNc);
-      const beforeUpdate = await jsm.streams.info(streamName);
-      assert.equal(
-        beforeUpdate.config.allow_direct,
-        true,
-        'precondition: stream must start with allow_direct: true'
-      );
-
-      const updated = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injUpdate);
-      const updateMsg = await updated;
-      assert.equal(updateMsg.payload.operation, 'update');
-      assert.equal(updateMsg.payload.success, true);
-
-      const afterUpdate = await jsm.streams.info(streamName);
-      assert.equal(
-        afterUpdate.config.allow_direct,
-        true,
-        'update with neither msg.allowDirect nor config.allowDirect set must preserve the existing value, not reset it to false'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
+    const afterUpdate = await jsm.streams.info(streamName);
+    assert.equal(
+      afterUpdate.config.allow_direct,
+      true,
+      'update with neither msg.allowDirect nor config.allowDirect set must preserve the existing value, not reset it to false'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
+});
 
 // --- Direct message get (Step 5, NATS-3.4-GAP-PLAN.md) --------------------
 
@@ -1272,7 +1264,11 @@ test('stream-consumer: "get-message" retrieves a known message by seq (direct) a
     await triggerInject(injBySeq);
     const bySeqMsg = await bySeq;
     assert.equal(bySeqMsg.operation, 'get-message');
-    assert.deepEqual(bySeqMsg.payload, payload, 'payload must round-trip exactly');
+    assert.deepEqual(
+      bySeqMsg.payload,
+      payload,
+      'payload must round-trip exactly'
+    );
     assert.equal(bySeqMsg.subject, subject);
     assert.equal(bySeqMsg.sequence, pubAck.seq);
     assert.equal(
@@ -1439,9 +1435,7 @@ test('stream-consumer: pedantic rejects a real config/ack_wait mismatch that non
          return msg;`,
         scon
       ),
-      injectNode(injPedantic, fnPedantic, [
-        { p: 'payload', v: '', vt: 'str' },
-      ]),
+      injectNode(injPedantic, fnPedantic, [{ p: 'payload', v: '', vt: 'str' }]),
       functionNode(
         fnPedantic,
         `msg.config = ${JSON.stringify({ ...mismatchConfig, durable_name: `${id}-pedantic` })};
@@ -1575,135 +1569,188 @@ test('stream-consumer: pull overflow (group/min_pending) actually withholds deli
 
 // --- expect fields + persist_mode (Step 8, NATS-3.4-GAP-PLAN.md) ----------
 
-test(
-  'stream-publisher: expectLastMsgID/expectLastSequence enforce real optimistic concurrency',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: expectLastMsgID/expectLastSequence enforce real optimistic concurrency', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('expect-');
-    const streamName = `STREAM_${id}`;
-    const subject = `test.jetstream.expect.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
-    const injBaseline = `${id}injbaseline`;
-    const injMsgIDMismatch = `${id}injmsgidmismatch`;
-    const injMsgIDMatch = `${id}injmsgidmatch`;
-    const injSeqMismatch = `${id}injseqmismatch`;
-    const injSeqMatch = `${id}injseqmatch`;
+  const id = uid('expect-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.expect.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
+  const injBaseline = `${id}injbaseline`;
+  const injMsgIDMismatch = `${id}injmsgidmismatch`;
+  const injMsgIDMatch = `${id}injmsgidmatch`;
+  const injSeqMismatch = `${id}injseqmismatch`;
+  const injSeqMatch = `${id}injseqmatch`;
 
-    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
-    publisher.storage = 'memory';
+  const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+  publisher.storage = 'memory';
 
-    const nodes = [
-      serverNode(srv),
-      publisher,
-      injectNode(injBaseline, spub, [
-        { p: 'payload', v: 'baseline', vt: 'str' },
-        { p: '_msgID', v: 'baseline-id', vt: 'str' },
-      ]),
-      injectNode(injMsgIDMismatch, spub, [
-        { p: 'payload', v: 'msgid-mismatch', vt: 'str' },
-        { p: 'expectLastMsgID', v: 'wrong-id', vt: 'str' },
-      ]),
-      injectNode(injMsgIDMatch, spub, [
-        { p: 'payload', v: 'msgid-match', vt: 'str' },
-        { p: 'expectLastMsgID', v: 'baseline-id', vt: 'str' },
-        { p: '_msgID', v: 'second-id', vt: 'str' },
-      ]),
-      injectNode(injSeqMismatch, spub, [
-        { p: 'payload', v: 'seq-mismatch', vt: 'str' },
-        { p: 'expectLastSequence', v: '999', vt: 'num' },
-      ]),
-      injectNode(injSeqMatch, spub, [
-        { p: 'payload', v: 'seq-match', vt: 'str' },
-        { p: 'expectLastSequence', v: '2', vt: 'num' },
-      ]),
-      debugNode(dbg),
-    ];
+  const nodes = [
+    serverNode(srv),
+    publisher,
+    injectNode(injBaseline, spub, [
+      { p: 'payload', v: 'baseline', vt: 'str' },
+      { p: '_msgID', v: 'baseline-id', vt: 'str' },
+    ]),
+    injectNode(injMsgIDMismatch, spub, [
+      { p: 'payload', v: 'msgid-mismatch', vt: 'str' },
+      { p: 'expectLastMsgID', v: 'wrong-id', vt: 'str' },
+    ]),
+    injectNode(injMsgIDMatch, spub, [
+      { p: 'payload', v: 'msgid-match', vt: 'str' },
+      { p: 'expectLastMsgID', v: 'baseline-id', vt: 'str' },
+      { p: '_msgID', v: 'second-id', vt: 'str' },
+    ]),
+    injectNode(injSeqMismatch, spub, [
+      { p: 'payload', v: 'seq-mismatch', vt: 'str' },
+      { p: 'expectLastSequence', v: '999', vt: 'num' },
+    ]),
+    injectNode(injSeqMatch, spub, [
+      { p: 'payload', v: 'seq-match', vt: 'str' },
+      { p: 'expectLastSequence', v: '2', vt: 'num' },
+    ]),
+    debugNode(dbg),
+  ];
 
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
 
-      const baselineResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injBaseline);
-      const baseline = await baselineResult;
-      assert.equal(baseline.published, true, 'baseline publish must succeed');
-      assert.equal(baseline.sequence, 1);
+    const baselineResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injBaseline);
+    const baseline = await baselineResult;
+    assert.equal(baseline.published, true, 'baseline publish must succeed');
+    assert.equal(baseline.sequence, 1);
 
-      const msgIDMismatchResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injMsgIDMismatch);
-      const msgIDMismatch = await msgIDMismatchResult;
-      assert.equal(
-        msgIDMismatch.published,
-        false,
-        'expectLastMsgID must reject a publish when the real last message ID does not match'
-      );
-      assert.match(msgIDMismatch.error, /wrong last msg/i);
+    const msgIDMismatchResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injMsgIDMismatch);
+    const msgIDMismatch = await msgIDMismatchResult;
+    assert.equal(
+      msgIDMismatch.published,
+      false,
+      'expectLastMsgID must reject a publish when the real last message ID does not match'
+    );
+    assert.match(msgIDMismatch.error, /wrong last msg/i);
 
-      const msgIDMatchResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injMsgIDMatch);
-      const msgIDMatch = await msgIDMatchResult;
-      assert.equal(
-        msgIDMatch.published,
-        true,
-        'expectLastMsgID must allow the publish when the real last message ID matches'
-      );
-      assert.equal(msgIDMatch.sequence, 2);
+    const msgIDMatchResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injMsgIDMatch);
+    const msgIDMatch = await msgIDMatchResult;
+    assert.equal(
+      msgIDMatch.published,
+      true,
+      'expectLastMsgID must allow the publish when the real last message ID matches'
+    );
+    assert.equal(msgIDMatch.sequence, 2);
 
-      const seqMismatchResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injSeqMismatch);
-      const seqMismatch = await seqMismatchResult;
-      assert.equal(
-        seqMismatch.published,
-        false,
-        'expectLastSequence must reject a publish when the real last sequence does not match'
-      );
-      assert.match(seqMismatch.error, /wrong last sequence/i);
+    const seqMismatchResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injSeqMismatch);
+    const seqMismatch = await seqMismatchResult;
+    assert.equal(
+      seqMismatch.published,
+      false,
+      'expectLastSequence must reject a publish when the real last sequence does not match'
+    );
+    assert.match(seqMismatch.error, /wrong last sequence/i);
 
-      const seqMatchResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injSeqMatch);
-      const seqMatch = await seqMatchResult;
-      assert.equal(
-        seqMatch.published,
-        true,
-        'expectLastSequence must allow the publish when the real last sequence matches'
-      );
-      assert.equal(seqMatch.sequence, 3);
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
+    const seqMatchResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injSeqMatch);
+    const seqMatch = await seqMatchResult;
+    assert.equal(
+      seqMatch.published,
+      true,
+      'expectLastSequence must allow the publish when the real last sequence matches'
+    );
+    assert.equal(seqMatch.sequence, 3);
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
+});
 
-test(
-  'stream-publisher: persistMode "async" on create actually sets persist_mode on the real stream',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: persistMode "async" on create actually sets persist_mode on the real stream', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('persistmode-');
-    const streamName = `STREAM_${id}`;
-    const subject = `test.jetstream.persistmode.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
+  const id = uid('persistmode-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.persistmode.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
 
-    // persist_mode "async" is only meaningful on file storage - the real
-    // server rejects it outright on memory streams ("async persist mode is
-    // only supported on file storage"), confirmed against a real broker.
+  // persist_mode "async" is only meaningful on file storage - the real
+  // server rejects it outright on memory streams ("async persist mode is
+  // only supported on file storage"), confirmed against a real broker.
+  const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+  publisher.storage = 'file';
+  publisher.persistMode = 'async';
+  publisher.maxBytes = 65536;
+
+  const nodes = [serverNode(srv), publisher, debugNode(dbg)];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const jsm = await jetstreamManager(directNc);
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.config.persist_mode,
+      'async',
+      'persistMode "async" on the node must produce persist_mode: "async" on the real stream'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
+
+test('stream-publisher: deploying against a pre-existing stream with a mismatched persistMode warns instead of crashing startup', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('persistmode-existing-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.persistmodeexisting.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
+
+  const directNc = await connectDirectNats();
+  const comms = connectComms();
+  let flowId;
+  try {
+    // persist_mode can never be changed via update once a stream exists
+    // (confirmed against a real broker: the server rejects the attempt
+    // outright, "stream configuration update can not change persist
+    // mode", even though allow_msg_ttl/allow_msg_schedules/allow_direct
+    // CAN all be auto-upgraded this same way on an existing stream). A
+    // stream created here with no persist_mode override, then a node
+    // configured for "async", reproduces exactly the state that used to
+    // make ensureStreamImpl() throw on every startup instead of just
+    // warning and continuing.
+    const jsm = await jetstreamManager(directNc);
+    await jsm.streams.add({
+      name: streamName,
+      subjects: [subject],
+      storage: 'file',
+      max_bytes: 65536,
+    });
+
     const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
     publisher.storage = 'file';
     publisher.persistMode = 'async';
@@ -1711,383 +1758,291 @@ test(
 
     const nodes = [serverNode(srv), publisher, debugNode(dbg)];
 
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    // Must reach green (i.e. ensureStreamImpl did not throw) even though
+    // the mismatch can never be reconciled.
+    await connected;
 
-      const jsm = await jetstreamManager(directNc);
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.config.persist_mode,
-        'async',
-        'persistMode "async" on the node must produce persist_mode: "async" on the real stream'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.config.persist_mode,
+      undefined,
+      'the pre-existing stream must be left with its original persist_mode - no update attempt should have been made'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
-
-test(
-  'stream-publisher: deploying against a pre-existing stream with a mismatched persistMode warns instead of crashing startup',
-  async t => {
-    if (!(await checkStack(t))) return;
-
-    const id = uid('persistmode-existing-');
-    const streamName = `STREAM_${id}`;
-    const subject = `test.jetstream.persistmodeexisting.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
-
-    const directNc = await connectDirectNats();
-    const comms = connectComms();
-    let flowId;
-    try {
-      // persist_mode can never be changed via update once a stream exists
-      // (confirmed against a real broker: the server rejects the attempt
-      // outright, "stream configuration update can not change persist
-      // mode", even though allow_msg_ttl/allow_msg_schedules/allow_direct
-      // CAN all be auto-upgraded this same way on an existing stream). A
-      // stream created here with no persist_mode override, then a node
-      // configured for "async", reproduces exactly the state that used to
-      // make ensureStreamImpl() throw on every startup instead of just
-      // warning and continuing.
-      const jsm = await jetstreamManager(directNc);
-      await jsm.streams.add({
-        name: streamName,
-        subjects: [subject],
-        storage: 'file',
-        max_bytes: 65536,
-      });
-
-      const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
-      publisher.storage = 'file';
-      publisher.persistMode = 'async';
-      publisher.maxBytes = 65536;
-
-      const nodes = [serverNode(srv), publisher, debugNode(dbg)];
-
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      // Must reach green (i.e. ensureStreamImpl did not throw) even though
-      // the mismatch can never be reconciled.
-      await connected;
-
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.config.persist_mode,
-        undefined,
-        'the pre-existing stream must be left with its original persist_mode - no update attempt should have been made'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
-  }
-);
+});
 
 // --- Step 8 (last bullet): JetStreamClient.startBatch() as a new
 // stream-publisher operation ("batch-publish": one atomic multi-message
 // publish driven by a single msg.batch array).
 
-test(
-  'stream-publisher: "batch-publish" lands every item atomically with the real BatchAck',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: "batch-publish" lands every item atomically with the real BatchAck', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('batch-');
-    const streamName = `STREAM_${id}`;
-    const prefix = `test.jetstream.batch.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
-    const inj = `${id}inj`;
+  const id = uid('batch-');
+  const streamName = `STREAM_${id}`;
+  const prefix = `test.jetstream.batch.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
+  const inj = `${id}inj`;
 
-    const publisher = streamPublisherNode(
-      spub,
-      srv,
-      streamName,
-      `${prefix}.a`,
-      dbg
+  const publisher = streamPublisherNode(
+    spub,
+    srv,
+    streamName,
+    `${prefix}.a`,
+    dbg
+  );
+  publisher.subjectPattern = `${prefix}.>`;
+  publisher.storage = 'memory';
+  publisher.allowAtomic = true;
+
+  const batch = [
+    { subject: `${prefix}.a`, payload: 'one' },
+    { subject: `${prefix}.b`, payload: 'two' },
+    { subject: `${prefix}.c`, payload: 'three' },
+    { subject: `${prefix}.d`, payload: 'four' },
+  ];
+
+  const nodes = [
+    serverNode(srv),
+    publisher,
+    injectNode(inj, spub, [
+      { p: 'operation', v: 'batch-publish', vt: 'str' },
+      { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
+    ]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const result = comms.waitForDebug(dbg, 10000);
+    await triggerInject(inj);
+    const ack = await result;
+
+    assert.equal(
+      ack.error,
+      undefined,
+      `batch-publish must not error, got ${JSON.stringify(ack.error)}`
     );
-    publisher.subjectPattern = `${prefix}.>`;
-    publisher.storage = 'memory';
-    publisher.allowAtomic = true;
+    assert.equal(ack.operation, 'batch-publish');
+    assert.equal(
+      ack.payload?.count,
+      batch.length,
+      `BatchAck.count must equal the number of items sent, got ${JSON.stringify(ack.payload)}`
+    );
 
-    const batch = [
-      { subject: `${prefix}.a`, payload: 'one' },
-      { subject: `${prefix}.b`, payload: 'two' },
-      { subject: `${prefix}.c`, payload: 'three' },
-      { subject: `${prefix}.d`, payload: 'four' },
-    ];
+    const jsm = await jetstreamManager(directNc);
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.state.messages,
+      batch.length,
+      'every batch item must actually be stored on the stream, not just acked'
+    );
 
-    const nodes = [
-      serverNode(srv),
-      publisher,
-      injectNode(inj, spub, [
-        { p: 'operation', v: 'batch-publish', vt: 'str' },
-        { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
-      ]),
-      debugNode(dbg),
-    ];
-
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
-
-      const result = comms.waitForDebug(dbg, 10000);
-      await triggerInject(inj);
-      const ack = await result;
-
-      assert.equal(
-        ack.error,
-        undefined,
-        `batch-publish must not error, got ${JSON.stringify(ack.error)}`
-      );
-      assert.equal(ack.operation, 'batch-publish');
-      assert.equal(
-        ack.payload?.count,
-        batch.length,
-        `BatchAck.count must equal the number of items sent, got ${JSON.stringify(ack.payload)}`
-      );
-
-      const jsm = await jetstreamManager(directNc);
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.state.messages,
-        batch.length,
-        'every batch item must actually be stored on the stream, not just acked'
-      );
-
-      for (let i = 0; i < batch.length; i++) {
-        const stored = await jsm.streams.getMessage(streamName, {
-          seq: i + 1,
-        });
-        assert.ok(stored, `message at seq ${i + 1} must exist`);
-        assert.equal(stored.subject, batch[i].subject);
-        assert.equal(stored.string(), batch[i].payload);
-      }
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
+    for (let i = 0; i < batch.length; i++) {
+      const stored = await jsm.streams.getMessage(streamName, {
+        seq: i + 1,
+      });
+      assert.ok(stored, `message at seq ${i + 1} must exist`);
+      assert.equal(stored.subject, batch[i].subject);
+      assert.equal(stored.string(), batch[i].payload);
     }
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
+});
 
-test(
-  'stream-publisher: "batch-publish" rejects a malformed batch before touching the connection',
-  async t => {
-    if (!(await checkStack(t))) return;
+test('stream-publisher: "batch-publish" rejects a malformed batch before touching the connection', async t => {
+  if (!(await checkStack(t))) return;
 
-    const id = uid('batch-bad-');
-    const streamName = `STREAM_${id}`;
-    const prefix = `test.jetstream.batchbad.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
-    const cat = `${id}cat`;
-    const injEmpty = `${id}injempty`;
-    const injMissing = `${id}injmissing`;
+  const id = uid('batch-bad-');
+  const streamName = `STREAM_${id}`;
+  const prefix = `test.jetstream.batchbad.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
+  const cat = `${id}cat`;
+  const injEmpty = `${id}injempty`;
+  const injMissing = `${id}injmissing`;
 
-    const publisher = streamPublisherNode(
-      spub,
-      srv,
-      streamName,
-      `${prefix}.a`,
-      dbg
-    );
-    publisher.subjectPattern = `${prefix}.>`;
-    publisher.storage = 'memory';
+  const publisher = streamPublisherNode(
+    spub,
+    srv,
+    streamName,
+    `${prefix}.a`,
+    dbg
+  );
+  publisher.subjectPattern = `${prefix}.>`;
+  publisher.storage = 'memory';
 
-    const nodes = [
-      serverNode(srv),
-      publisher,
-      injectNode(injEmpty, spub, [
-        { p: 'operation', v: 'batch-publish', vt: 'str' },
-        { p: 'batch', v: '[]', vt: 'json' },
-      ]),
-      injectNode(injMissing, spub, [
-        { p: 'operation', v: 'batch-publish', vt: 'str' },
-        {
-          // Only the second item is actually invalid (no subject) - the
-          // first item (subject, no payload) is a legitimate empty-body
-          // item, not a rejection trigger on its own (payload isn't
-          // validated, matching the regular publish path's own
-          // toPayload(undefined) convention).
-          p: 'batch',
-          v: JSON.stringify([{ subject: `${prefix}.a` }, { payload: 'x' }]),
-          vt: 'json',
-        },
-      ]),
-      catchNode(cat, [spub], dbg),
-      debugNode(dbg),
-    ];
-
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
-
-      const emptyResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injEmpty);
-      const emptyErr = await emptyResult;
-      assert.ok(emptyErr.error, 'an empty batch must be rejected with a real error');
-
-      const missingResult = comms.waitForDebug(dbg, 8000);
-      await triggerInject(injMissing);
-      const missingErr = await missingResult;
-      assert.ok(
-        missingErr.error,
-        'a batch item missing a required subject must be rejected with a real error'
-      );
-
-      const jsm = await jetstreamManager(directNc);
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.state.messages,
-        0,
-        'neither malformed batch must have published anything to the real stream'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
-  }
-);
-
-test(
-  'stream-publisher: "batch-publish" is genuinely atomic - a bad expect on the first item aborts the whole batch, zero messages land',
-  async t => {
-    if (!(await checkStack(t))) return;
-
-    // Confirmed empirically against the real broker before writing this:
-    // - a mismatched `expect` on a MIDDLE item is silently ignored by both
-    //   add() and commit() (with or without `ack: true`) - the server does
-    //   not appear to cross-validate expect for non-terminal batch items in
-    //   this version, so that path cannot be used to prove atomicity.
-    // - a mismatched `expect` on the FIRST item (via startBatch()) does not
-    //   throw immediately either - startBatch() returns a real batch
-    //   handle - but commit() then reliably rejects with a real server
-    //   error ("batch didn't contain number of published messages"), and
-    //   the stream is left with zero messages: true all-or-nothing
-    //   behavior, just discovered at commit() rather than at the point of
-    //   the actual mismatch.
-    const id = uid('batch-atomic-');
-    const streamName = `STREAM_${id}`;
-    const prefix = `test.jetstream.batchatomic.${id}`;
-    const srv = `${id}srv`;
-    const spub = `${id}spub`;
-    const dbg = `${id}dbg`;
-    const cat = `${id}cat`;
-    const inj = `${id}inj`;
-
-    const publisher = streamPublisherNode(
-      spub,
-      srv,
-      streamName,
-      `${prefix}.a`,
-      dbg
-    );
-    publisher.subjectPattern = `${prefix}.>`;
-    publisher.storage = 'memory';
-    publisher.allowAtomic = true;
-
-    const batch = [
+  const nodes = [
+    serverNode(srv),
+    publisher,
+    injectNode(injEmpty, spub, [
+      { p: 'operation', v: 'batch-publish', vt: 'str' },
+      { p: 'batch', v: '[]', vt: 'json' },
+    ]),
+    injectNode(injMissing, spub, [
+      { p: 'operation', v: 'batch-publish', vt: 'str' },
       {
-        subject: `${prefix}.a`,
-        payload: 'first',
-        expect: { lastSequence: 999999 },
+        // Only the second item is actually invalid (no subject) - the
+        // first item (subject, no payload) is a legitimate empty-body
+        // item, not a rejection trigger on its own (payload isn't
+        // validated, matching the regular publish path's own
+        // toPayload(undefined) convention).
+        p: 'batch',
+        v: JSON.stringify([{ subject: `${prefix}.a` }, { payload: 'x' }]),
+        vt: 'json',
       },
-      { subject: `${prefix}.b`, payload: 'middle' },
-      { subject: `${prefix}.c`, payload: 'last' },
-    ];
+    ]),
+    catchNode(cat, [spub], dbg),
+    debugNode(dbg),
+  ];
 
-    const nodes = [
-      serverNode(srv),
-      publisher,
-      injectNode(inj, spub, [
-        { p: 'operation', v: 'batch-publish', vt: 'str' },
-        { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
-      ]),
-      catchNode(cat, [spub], dbg),
-      debugNode(dbg),
-    ];
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
 
-    const comms = connectComms();
-    const directNc = await connectDirectNats();
-    let flowId;
-    try {
-      await comms.ready;
-      const connected = comms.waitForStatus(
-        spub,
-        d => d.fill === 'green',
-        15000
-      );
-      flowId = await deployFlow(nodes);
-      await connected;
+    const emptyResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injEmpty);
+    const emptyErr = await emptyResult;
+    assert.ok(
+      emptyErr.error,
+      'an empty batch must be rejected with a real error'
+    );
 
-      const result = comms.waitForDebug(dbg, 10000);
-      await triggerInject(inj);
-      const failed = await result;
+    const missingResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injMissing);
+    const missingErr = await missingResult;
+    assert.ok(
+      missingErr.error,
+      'a batch item missing a required subject must be rejected with a real error'
+    );
 
-      assert.ok(
-        failed.error,
-        `a real expect mismatch on the first item must reject the whole batch, got ${JSON.stringify(failed)}`
-      );
-
-      const jsm = await jetstreamManager(directNc);
-      const info = await jsm.streams.info(streamName);
-      assert.equal(
-        info.state.messages,
-        0,
-        'a rejected batch must leave zero messages on the stream - not even the ones already add()ed before the failing commit'
-      );
-    } finally {
-      if (flowId) await ignoreFailure(deleteFlow(flowId));
-      comms.close();
-      await deleteStream(directNc, streamName);
-      await ignoreFailure(directNc.close());
-    }
+    const jsm = await jetstreamManager(directNc);
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.state.messages,
+      0,
+      'neither malformed batch must have published anything to the real stream'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
   }
-);
+});
+
+test('stream-publisher: "batch-publish" is genuinely atomic - a bad expect on the first item aborts the whole batch, zero messages land', async t => {
+  if (!(await checkStack(t))) return;
+
+  // Confirmed empirically against the real broker before writing this:
+  // - a mismatched `expect` on a MIDDLE item is silently ignored by both
+  //   add() and commit() (with or without `ack: true`) - the server does
+  //   not appear to cross-validate expect for non-terminal batch items in
+  //   this version, so that path cannot be used to prove atomicity.
+  // - a mismatched `expect` on the FIRST item (via startBatch()) does not
+  //   throw immediately either - startBatch() returns a real batch
+  //   handle - but commit() then reliably rejects with a real server
+  //   error ("batch didn't contain number of published messages"), and
+  //   the stream is left with zero messages: true all-or-nothing
+  //   behavior, just discovered at commit() rather than at the point of
+  //   the actual mismatch.
+  const id = uid('batch-atomic-');
+  const streamName = `STREAM_${id}`;
+  const prefix = `test.jetstream.batchatomic.${id}`;
+  const srv = `${id}srv`;
+  const spub = `${id}spub`;
+  const dbg = `${id}dbg`;
+  const cat = `${id}cat`;
+  const inj = `${id}inj`;
+
+  const publisher = streamPublisherNode(
+    spub,
+    srv,
+    streamName,
+    `${prefix}.a`,
+    dbg
+  );
+  publisher.subjectPattern = `${prefix}.>`;
+  publisher.storage = 'memory';
+  publisher.allowAtomic = true;
+
+  const batch = [
+    {
+      subject: `${prefix}.a`,
+      payload: 'first',
+      expect: { lastSequence: 999999 },
+    },
+    { subject: `${prefix}.b`, payload: 'middle' },
+    { subject: `${prefix}.c`, payload: 'last' },
+  ];
+
+  const nodes = [
+    serverNode(srv),
+    publisher,
+    injectNode(inj, spub, [
+      { p: 'operation', v: 'batch-publish', vt: 'str' },
+      { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
+    ]),
+    catchNode(cat, [spub], dbg),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(spub, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const result = comms.waitForDebug(dbg, 10000);
+    await triggerInject(inj);
+    const failed = await result;
+
+    assert.ok(
+      failed.error,
+      `a real expect mismatch on the first item must reject the whole batch, got ${JSON.stringify(failed)}`
+    );
+
+    const jsm = await jetstreamManager(directNc);
+    const info = await jsm.streams.info(streamName);
+    assert.equal(
+      info.state.messages,
+      0,
+      'a rejected batch must leave zero messages on the stream - not even the ones already add()ed before the failing commit'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});

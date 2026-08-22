@@ -34,7 +34,6 @@ module.exports = function (RED) {
 
     // Health check state
     let healthCheckInterval = null;
-    let healthCheckStartTimer = null;
 
     // Register with connection pool
     this.serverConfig.registerConnectionUser(node.id);
@@ -116,7 +115,10 @@ module.exports = function (RED) {
         // to.
         const endpoint = config.endpoint || 'process';
         const endpointTarget = config.groupSubject
-          ? service.addGroup(config.groupSubject, config.groupQueue || undefined)
+          ? service.addGroup(
+              config.groupSubject,
+              config.groupQueue || undefined
+            )
           : service;
         const subject =
           config.endpointSubject ||
@@ -236,8 +238,10 @@ module.exports = function (RED) {
         });
         isServiceRunning = true;
 
-        node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
-        node.log(`[SERVICE] Endpoint: ${effectiveSubject}`);
+        if (isDebug) {
+          node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
+          node.log(`[SERVICE] Endpoint: ${effectiveSubject}`);
+        }
         node.status({
           fill: 'green',
           shape: 'dot',
@@ -248,7 +252,9 @@ module.exports = function (RED) {
           try {
             await service.stop();
           } catch (stopErr) {
-            node.warn(`[SERVICE] Failed to roll back startup: ${stopErr.message}`);
+            node.warn(
+              `[SERVICE] Failed to roll back startup: ${stopErr.message}`
+            );
           }
           service = null;
         }
@@ -268,7 +274,7 @@ module.exports = function (RED) {
         isServiceRunning = false;
         service = null;
 
-        node.log('[SERVICE] Service stopped');
+        if (isDebug) node.log('[SERVICE] Service stopped');
         node.status({ fill: 'grey', shape: 'ring', text: 'stopped' });
       } catch (err) {
         node.status({ fill: 'red', shape: 'ring', text: 'stop failed' });
@@ -518,46 +524,52 @@ module.exports = function (RED) {
         };
         const responseSub = natsnc.subscribe(requestSubject, { max: 1 });
         const respond = async () => {
-          for await (const msg of responseSub) {
-            if (msg.reply) {
-              msg.respond(
-                JSON.stringify({ response: 'ok', timestamp: Date.now() })
-              );
+          try {
+            for await (const msg of responseSub) {
+              if (msg.reply) {
+                msg.respond(
+                  JSON.stringify({ response: 'ok', timestamp: Date.now() })
+                );
+              }
+              break;
             }
-            break;
+          } catch {
+            // Unsubscribed or connection closed during a failed request.
           }
         };
         const responding = respond();
         await natsnc.flush();
 
         const requestStart = Date.now();
-        const response = await natsnc.request(
-          requestSubject,
-          JSON.stringify(requestMessage),
-          {
-            timeout: 1000,
+        try {
+          const response = await natsnc.request(
+            requestSubject,
+            JSON.stringify(requestMessage),
+            {
+              timeout: 1000,
+            }
+          );
+          await responding;
+          const requestLatency = Date.now() - requestStart;
+
+          if (response) {
+            results.push({
+              test: 'request_response',
+              status: 'passed',
+              latency: `${requestLatency}ms`,
+            });
+            passed++;
+          } else {
+            results.push({
+              test: 'request_response',
+              status: 'failed',
+              error: 'No response received',
+            });
+            failed++;
           }
-        );
-        await responding;
-        const requestLatency = Date.now() - requestStart;
-
-        if (response) {
-          results.push({
-            test: 'request_response',
-            status: 'passed',
-            latency: `${requestLatency}ms`,
-          });
-          passed++;
-        } else {
-          results.push({
-            test: 'request_response',
-            status: 'failed',
-            error: 'No response received',
-          });
-          failed++;
+        } finally {
+          responseSub.unsubscribe();
         }
-
-        responseSub.unsubscribe();
       } catch (error) {
         results.push({
           test: 'connectivity',
@@ -759,10 +771,27 @@ module.exports = function (RED) {
     } else if (config.mode === 'health') {
       // Initial health check
       if (config.checkOnStart) {
-        healthCheckStartTimer = setTimeout(() => {
-          healthCheckStartTimer = null;
-          performHealthCheck();
-        }, 2000);
+        void (async () => {
+          try {
+            // Bounded wait: connect timeout is the deadline when the broker
+            // never comes up. The config node keeps retrying; this check
+            // must not wait forever. performHealthCheck reports disconnected
+            // if we still aren't up when the deadline fires.
+            const deadlineMs = this.serverConfig.connectTimeout || 10000;
+            await Promise.race([
+              this.serverConfig.getConnection().catch(() => {}),
+              new Promise(resolve => {
+                setTimeout(resolve, deadlineMs);
+              }),
+            ]);
+            if (!closing) await performHealthCheck();
+          } catch (err) {
+            if (!closing)
+              node.warn(
+                `[SERVICE] Initial health check failed: ${err.message}`
+              );
+          }
+        })();
       }
       // Periodic health check if enabled
       if (config.periodicCheck && config.checkInterval > 0) {
@@ -966,10 +995,6 @@ module.exports = function (RED) {
       if (healthCheckInterval) {
         clearInterval(healthCheckInterval);
         healthCheckInterval = null;
-      }
-      if (healthCheckStartTimer) {
-        clearTimeout(healthCheckStartTimer);
-        healthCheckStartTimer = null;
       }
       let closeError;
       try {

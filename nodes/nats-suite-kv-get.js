@@ -2,6 +2,7 @@
 
 const { Kvm } = require('@nats-io/kv');
 const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsKvGetNode(config) {
@@ -25,10 +26,21 @@ module.exports = function (RED) {
     let watcher = null;
     let watchTask = null;
     let watchSetupTask = null;
+    let pendingWatchStart = null;
     let isWatching = false;
     let statusTimer = null;
     let closing = false;
     const isDebug = config.debug || this.serverConfig.debug || false;
+
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => {
+        if (isWatching) {
+          node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+        } else if (config.mode !== 'watch') {
+          node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+        }
+      },
+    });
 
     // Helper: Get or create KV bucket. Kvm#create() is create-or-open (a
     // no-op if the bucket already exists), so it replaces the old
@@ -156,112 +168,134 @@ module.exports = function (RED) {
     };
 
     // Helper: Start watching keys
-    const startWatch = async () => {
-      if (isWatching) return;
+    const startWatch = () => {
+      if (isWatching) return Promise.resolve();
+      if (pendingWatchStart) return pendingWatchStart;
 
-      const kv = await getKVBucket();
-
-      // Determine watch options
-      const watchOptions = {};
-      if (config.watchPattern) {
-        // A comma-separated pattern becomes a real multi-key watch (server
-        // 2.10+); a single pattern keeps working exactly as before.
-        const keys = config.watchPattern
-          .split(',')
-          .map(k => k.trim())
-          .filter(Boolean);
-        watchOptions.key = keys.length > 1 ? keys : keys[0];
-      }
-
-      if (config.ignoreDeletes) {
-        watchOptions.ignoreDeletes = true;
-      }
-
-      if (config.watchHeadersOnly) {
-        watchOptions.headers_only = true;
-      }
-
-      if (config.watchInclude) {
-        watchOptions.include = config.watchInclude;
-      }
-
-      if (config.watchResumeFromRevision) {
-        watchOptions.resumeFromRevision = parseInt(
-          config.watchResumeFromRevision,
-          10
-        );
-      }
-
-      watcher = await kv.watch(watchOptions);
-      if (closing) {
-        await watcher.stop();
-        watcher = null;
-        return;
-      }
-      const activeWatcher = watcher;
-      isWatching = true;
-
-      node.status({ fill: 'green', shape: 'dot', text: 'watching' });
-      if (isDebug)
-        node.log(`[KV GET] Started watching: ${config.watchPattern || '*'}`);
-
-      // Process watch events
-      const consumeWatch = async () => {
+      pendingWatchStart = (async () => {
         try {
-          for await (const entry of activeWatcher) {
-            if (!isWatching) break;
+          const kv = await getKVBucket();
 
-            // With headers_only, entry.value is a truthy-but-empty Buffer -
-            // entry.value.length (the real buffer) is 0 even though
-            // entry.length (metadata) still reports the real byte count.
-            // Check the buffer itself, not the metadata field, or
-            // entry.string() returns '' instead of "we stripped this".
-            const value =
-              entry.value && entry.value.length > 0 ? entry.string() : null;
-            const parsedValue = value !== null ? parseValue(value) : null;
+          // Determine watch options
+          const watchOptions = {};
+          if (config.watchPattern) {
+            // A comma-separated pattern becomes a real multi-key watch (server
+            // 2.10+); a single pattern keeps working exactly as before.
+            const keys = config.watchPattern
+              .split(',')
+              .map(k => k.trim())
+              .filter(Boolean);
+            watchOptions.key = keys.length > 1 ? keys : keys[0];
+          }
 
-            const msg = {
-              payload: parsedValue,
-              key: entry.key,
-              operation: entry.operation,
-              revision: entry.revision,
-              length: entry.length,
-              created: entry.created
-                ? new Date(entry.created).toISOString()
-                : null,
-              bucket: node.bucket,
-              _watchEvent: true,
-            };
+          if (config.ignoreDeletes) {
+            watchOptions.ignoreDeletes = true;
+          }
 
-            node.send(msg);
+          if (config.watchHeadersOnly) {
+            watchOptions.headers_only = true;
+          }
 
-            node.status({
-              fill: 'blue',
-              shape: 'dot',
-              text: `${entry.operation}: ${entry.key}`,
-            });
+          if (config.watchInclude) {
+            watchOptions.include = config.watchInclude;
+          }
 
-            // Reset status after 1 second
-            if (statusTimer) clearTimeout(statusTimer);
-            statusTimer = setTimeout(() => {
-              statusTimer = null;
-              if (isWatching) {
+          if (config.watchResumeFromRevision) {
+            watchOptions.resumeFromRevision = parseInt(
+              config.watchResumeFromRevision,
+              10
+            );
+          }
+
+          watcher = await kv.watch(watchOptions);
+          if (closing) {
+            await watcher.stop();
+            watcher = null;
+            return;
+          }
+          const activeWatcher = watcher;
+          isWatching = true;
+
+          node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+          if (isDebug)
+            node.log(
+              `[KV GET] Started watching: ${config.watchPattern || '*'}`
+            );
+
+          // Process watch events
+          const consumeWatch = async () => {
+            try {
+              for await (const entry of activeWatcher) {
+                if (!isWatching) break;
+
+                // With headers_only, entry.value is a truthy-but-empty Buffer -
+                // entry.value.length (the real buffer) is 0 even though
+                // entry.length (metadata) still reports the real byte count.
+                // Check the buffer itself, not the metadata field, or
+                // entry.string() returns '' instead of "we stripped this".
+                const value =
+                  entry.value && entry.value.length > 0 ? entry.string() : null;
+                const parsedValue = value !== null ? parseValue(value) : null;
+
+                const msg = {
+                  payload: parsedValue,
+                  key: entry.key,
+                  operation: entry.operation,
+                  revision: entry.revision,
+                  length: entry.length,
+                  created: entry.created
+                    ? new Date(entry.created).toISOString()
+                    : null,
+                  bucket: node.bucket,
+                  _watchEvent: true,
+                };
+
+                node.send(msg);
+
                 node.status({
-                  fill: 'green',
+                  fill: 'blue',
                   shape: 'dot',
-                  text: 'watching',
+                  text: `${entry.operation}: ${entry.key}`,
+                });
+
+                // Reset status after 1 second
+                if (statusTimer) clearTimeout(statusTimer);
+                statusTimer = setTimeout(() => {
+                  statusTimer = null;
+                  if (isWatching) {
+                    node.status({
+                      fill: 'green',
+                      shape: 'dot',
+                      text: 'watching',
+                    });
+                  }
+                }, 1000);
+              }
+            } catch (err) {
+              isWatching = false;
+              watcher = null;
+              watchTask = null;
+              if (statusTimer) {
+                clearTimeout(statusTimer);
+                statusTimer = null;
+              }
+              if (!closing) {
+                node.error(`Watch error: ${err.message}`);
+                node.status({
+                  fill: 'red',
+                  shape: 'ring',
+                  text: 'watch error',
                 });
               }
-            }, 1000);
-          }
-        } catch (err) {
-          if (isWatching) {
-            node.error(`Watch error: ${err.message}`);
-            node.status({ fill: 'red', shape: 'ring', text: 'watch error' });
-          }
+            }
+          };
+          watchTask = consumeWatch();
+        } finally {
+          pendingWatchStart = null;
         }
-      };
-      watchTask = consumeWatch();
+      })();
+
+      return pendingWatchStart;
     };
 
     // Helper: Stop watching
@@ -403,6 +437,7 @@ module.exports = function (RED) {
       let closeError;
       try {
         closing = true;
+        detachStatus();
         if (statusTimer) clearTimeout(statusTimer);
         if (watchSetupTask) await watchSetupTask;
         await stopWatch();

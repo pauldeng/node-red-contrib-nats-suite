@@ -144,7 +144,10 @@ test('server-pool: get-servers returns the pool the shared connection actually d
     await triggerInject(inj);
     const msg = await result;
 
-    assert.ok(Array.isArray(msg.payload) && msg.payload.length > 0, 'payload must be a non-empty list');
+    assert.ok(
+      Array.isArray(msg.payload) && msg.payload.length > 0,
+      'payload must be a non-empty list'
+    );
     assert.ok(
       msg.payload.some(s => s.includes('4222')),
       `expected the main broker's port in ${JSON.stringify(msg.payload)}`
@@ -183,7 +186,15 @@ test('server-pool: set-servers rejects an invalid payload without touching the c
       { p: 'payload', v: '[]', vt: 'json' },
     ]),
     injectNode(injGet, pool, []),
-    { id: cat, type: 'catch', z: 'FLOW', name: '', scope: [pool], uncaught: false, wires: [[dbgCat]] },
+    {
+      id: cat,
+      type: 'catch',
+      z: 'FLOW',
+      name: '',
+      scope: [pool],
+      uncaught: false,
+      wires: [[dbgCat]],
+    },
     debugNode(dbgCat),
     debugNode(dbgGet),
   ];
@@ -206,7 +217,10 @@ test('server-pool: set-servers rejects an invalid payload without touching the c
     const result = comms.waitForDebug(dbgGet, 8000);
     await triggerInject(injGet);
     const msg = await result;
-    assert.ok(msg.payload.some(s => s.includes('4222')), 'original pool must survive a rejected set-servers');
+    assert.ok(
+      msg.payload.some(s => s.includes('4222')),
+      'original pool must survive a rejected set-servers'
+    );
   } finally {
     if (flowId) await ignoreFailure(deleteFlow(flowId));
     comms.close();
@@ -229,8 +243,12 @@ test('server-pool: set-servers + reconnectAfterSet moves a shared connection ont
   const nodes = [
     serverNode(srv),
     publishNode(pub, srv, subject, null),
-    serverPoolNode(pool, srv, 'set-servers', dbgPool, { reconnectAfterSet: true }),
-    injectNode(injSet, pool, [{ p: 'payload', v: '["localhost:4223"]', vt: 'json' }]),
+    serverPoolNode(pool, srv, 'set-servers', dbgPool, {
+      reconnectAfterSet: true,
+    }),
+    injectNode(injSet, pool, [
+      { p: 'payload', v: '["localhost:4223"]', vt: 'json' },
+    ]),
     injectNode(injPub, pub, [{ p: 'payload', v: 'hello-embedded', vt: 'str' }]),
     debugNode(dbgPool),
   ];
@@ -249,9 +267,15 @@ test('server-pool: set-servers + reconnectAfterSet moves a shared connection ont
     // rules out a false-positive later where the embedded broker "sees" it
     // for an unrelated reason (wrong subject bleed-through, stale sub, etc).
     const baselineMain = subscribeOnce(mainNc, subject, 5000);
-    const baselineEmbeddedShouldTimeout = subscribeOnce(embeddedNc, subject, 2000).then(
+    const baselineEmbeddedShouldTimeout = subscribeOnce(
+      embeddedNc,
+      subject,
+      2000
+    ).then(
       () => {
-        throw new Error('message unexpectedly reached the embedded broker before any swap');
+        throw new Error(
+          'message unexpectedly reached the embedded broker before any swap'
+        );
       },
       () => 'not-there'
     );
@@ -271,7 +295,9 @@ test('server-pool: set-servers + reconnectAfterSet moves a shared connection ont
     const afterEmbedded = subscribeOnce(embeddedNc, subject, 5000);
     const afterMainShouldTimeout = subscribeOnce(mainNc, subject, 2000).then(
       () => {
-        throw new Error('message unexpectedly still reached the main broker after the swap');
+        throw new Error(
+          'message unexpectedly still reached the main broker after the swap'
+        );
       },
       () => 'not-there'
     );

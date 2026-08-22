@@ -1,8 +1,10 @@
 'use strict';
 
+const { readFile } = require('node:fs/promises');
 const { Objm } = require('@nats-io/obj');
 const { nanos, headers: natsHeaders } = require('@nats-io/nats-core');
 const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsObjectPutNode(config) {
@@ -12,25 +14,13 @@ module.exports = function (RED) {
     this.serverConfig = resolveServer(RED, node, config);
     if (!this.serverConfig) return;
 
-    // Bucket configuration - can use bucketConfig node OR direct settings
     this.bucket = config.bucket || '';
-    this.bucketConfig = config.bucketConfig
-      ? RED.nodes.getNode(config.bucketConfig)
-      : null;
-
-    // If bucketConfig node exists, use it; otherwise use direct settings
-    if (this.bucketConfig) {
-      this.bucket = this.bucketConfig.bucket;
-      this.serverConfig = this.bucketConfig.serverConfig;
-    } else {
-      // Direct bucket settings
-      this.description = config.description || '';
-      this.maxAge = parseInt(config.maxAge) || 0;
-      this.maxBytes = parseInt(config.maxBytes) || 0;
-      this.storage = config.storage || 'file';
-      this.replicas = parseInt(config.replicas) || 1;
-      this.compression = !!config.compression;
-    }
+    this.description = config.description || '';
+    this.maxAge = parseInt(config.maxAge) || 0;
+    this.maxBytes = parseInt(config.maxBytes) || 0;
+    this.storage = config.storage || 'file';
+    this.replicas = parseInt(config.replicas) || 1;
+    this.compression = !!config.compression;
 
     let objectStore = null;
     const isDebug = config.debug || this.serverConfig.debug || false;
@@ -62,11 +52,6 @@ module.exports = function (RED) {
     // try-bare-open-then-create fallback.
     const getObjectStore = async () => {
       if (objectStore) return objectStore;
-
-      if (node.bucketConfig) {
-        objectStore = await node.bucketConfig.getObjectStore();
-        return objectStore;
-      }
 
       const nc = await node.serverConfig.getConnection();
       const createOptions = {
@@ -231,7 +216,11 @@ module.exports = function (RED) {
     // Register with connection pool
     this.serverConfig.registerConnectionUser(node.id);
 
-    node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => {
+        node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+      },
+    });
 
     // Input handler
     node.on('input', async function (msg, send, done) {
@@ -369,16 +358,15 @@ module.exports = function (RED) {
             ? msg.payload
             : Buffer.from(String(msg.payload));
         } else if (config.dataFrom === 'file') {
-          const fs = require('fs');
           const filePath = msg.filePath || config.filePath;
           if (!filePath) {
             done(new Error('No file path specified'));
             return;
           }
-          data = fs.readFileSync(filePath);
+          data = await readFile(filePath);
         }
 
-        if (!data) {
+        if (data === undefined || data === null) {
           done(new Error('No data specified'));
           return;
         }
@@ -464,6 +452,7 @@ module.exports = function (RED) {
 
     // Cleanup
     node.on('close', function (done) {
+      detachStatus();
       this.serverConfig.unregisterConnectionUser(node.id);
       done();
     });

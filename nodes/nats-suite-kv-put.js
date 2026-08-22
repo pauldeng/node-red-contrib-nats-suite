@@ -3,6 +3,7 @@
 const { Kvm } = require('@nats-io/kv');
 const { JetStreamApiCodes, JetStreamApiError } = require('@nats-io/jetstream');
 const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsKvPutNode(config) {
@@ -14,8 +15,10 @@ module.exports = function (RED) {
 
     this.bucket = config.bucket || '';
     this.description = config.description || '';
-    this.history = parseInt(config.history) || 10;
-    this.maxAge = parseInt(config.maxAge) || 0;
+    this.history = Number.parseInt(config.history, 10);
+    if (!Number.isFinite(this.history)) this.history = 10;
+    this.maxAge = Number.parseInt(config.maxAge, 10);
+    if (!Number.isFinite(this.maxAge)) this.maxAge = 0;
     this.maxBytes = parseInt(config.maxBytes) || 0;
     this.maxValueSize = parseInt(config.maxValueSize) || 0;
     this.compression = !!config.compression;
@@ -78,32 +81,47 @@ module.exports = function (RED) {
         switch (operation) {
           case 'bucket-create': {
             const createOptions = {
-              history: msg.history
-                ? parseInt(msg.history, 10)
-                : node.history || 10,
-              ttl: msg.maxAge
-                ? parseInt(msg.maxAge, 10) * 1000
-                : node.maxAge
-                  ? node.maxAge * 1000
-                  : undefined,
-              max_bytes: msg.maxBytes
-                ? parseInt(msg.maxBytes, 10)
-                : node.maxBytes || undefined,
-              maxValueSize: msg.maxValueSize
-                ? parseInt(msg.maxValueSize, 10)
-                : node.maxValueSize || undefined,
+              history:
+                msg.history !== undefined && msg.history !== null
+                  ? parseInt(msg.history, 10)
+                  : (node.history ?? 10),
+              ttl:
+                msg.maxAge !== undefined && msg.maxAge !== null
+                  ? parseInt(msg.maxAge, 10) * 1000
+                  : node.maxAge !== undefined && node.maxAge !== null
+                    ? node.maxAge * 1000
+                    : undefined,
+              max_bytes:
+                msg.maxBytes !== undefined && msg.maxBytes !== null
+                  ? parseInt(msg.maxBytes, 10)
+                  : node.maxBytes !== undefined && node.maxBytes !== null
+                    ? node.maxBytes
+                    : undefined,
+              maxValueSize:
+                msg.maxValueSize !== undefined && msg.maxValueSize !== null
+                  ? parseInt(msg.maxValueSize, 10)
+                  : node.maxValueSize !== undefined &&
+                      node.maxValueSize !== null
+                    ? node.maxValueSize
+                    : undefined,
               compression:
                 msg.compression !== undefined
                   ? !!msg.compression
                   : node.compression,
-              replicas: msg.replicas
-                ? parseInt(msg.replicas, 10)
-                : node.replicas || 1,
+              replicas:
+                msg.replicas !== undefined && msg.replicas !== null
+                  ? parseInt(msg.replicas, 10)
+                  : (node.replicas ?? 1),
               storage:
                 (msg.storage || node.storage) === 'memory' ? 'memory' : 'file',
-              markerTTL: msg.bucketMarkerTTL
-                ? parseInt(msg.bucketMarkerTTL, 10)
-                : node.bucketMarkerTTL || undefined,
+              markerTTL:
+                msg.bucketMarkerTTL !== undefined &&
+                msg.bucketMarkerTTL !== null
+                  ? parseInt(msg.bucketMarkerTTL, 10)
+                  : node.bucketMarkerTTL !== undefined &&
+                      node.bucketMarkerTTL !== null
+                    ? node.bucketMarkerTTL
+                    : undefined,
             };
 
             Object.keys(createOptions).forEach(key => {
@@ -191,7 +209,11 @@ module.exports = function (RED) {
     // Register with connection pool
     this.serverConfig.registerConnectionUser(node.id);
 
-    node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => {
+        node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+      },
+    });
 
     // Input handler
     node.on('input', async function (msg, send, done) {
@@ -300,7 +322,8 @@ module.exports = function (RED) {
             // markerTTL (a plain millisecond number set at bucket creation,
             // which must be non-zero first or the server rejects this with
             // "per-message TTL is disabled", confirmed against a real broker).
-            const markerTTL = msg.markerTTL || config.createMarkerTTL || undefined;
+            const markerTTL =
+              msg.markerTTL || config.createMarkerTTL || undefined;
 
             try {
               const revision = await kv.create(key, preparedValue, markerTTL);
@@ -460,6 +483,7 @@ module.exports = function (RED) {
     // Cleanup on close
     node.on('close', function (done) {
       if (statusTimer) clearTimeout(statusTimer);
+      detachStatus();
       this.serverConfig.unregisterConnectionUser(node.id);
       kvStore = null;
       node.status({});

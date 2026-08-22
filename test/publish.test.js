@@ -81,11 +81,26 @@ function debugNode(id) {
 }
 
 function catchNode(id, scope, wireTo) {
-  return { id, type: 'catch', z: 'FLOW', name: '', scope, uncaught: false, wires: [[wireTo]] };
+  return {
+    id,
+    type: 'catch',
+    z: 'FLOW',
+    name: '',
+    scope,
+    uncaught: false,
+    wires: [[wireTo]],
+  };
 }
 
 function completeNode(id, scope, wireTo) {
-  return { id, type: 'complete', z: 'FLOW', name: '', scope, wires: [[wireTo]] };
+  return {
+    id,
+    type: 'complete',
+    z: 'FLOW',
+    name: '',
+    scope,
+    wires: [[wireTo]],
+  };
 }
 
 async function collectMessages(sub, count, timeoutMs = 5000) {
@@ -98,10 +113,20 @@ async function collectMessages(sub, count, timeoutMs = 5000) {
           messages.push(message);
           if (messages.length === count) return messages;
         }
-        throw new Error(`Subscription ended before receiving ${count} messages`);
+        throw new Error(
+          `Subscription ended before receiving ${count} messages`
+        );
       })(),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${count} messages`)), timeoutMs);
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Timed out after ${timeoutMs}ms waiting for ${count} messages`
+              )
+            ),
+          timeoutMs
+        );
       }),
     ]);
   } finally {
@@ -142,7 +167,12 @@ async function collectMessagesThroughSettle(
   try {
     const firstMessage = new Promise((_, reject) => {
       firstTimer = setTimeout(
-        () => reject(new Error(`Timed out after ${firstMessageTimeoutMs}ms waiting for the first message`)),
+        () =>
+          reject(
+            new Error(
+              `Timed out after ${firstMessageTimeoutMs}ms waiting for the first message`
+            )
+          ),
         firstMessageTimeoutMs
       );
     });
@@ -170,13 +200,24 @@ async function checkStack(t) {
 }
 
 let seq = 0;
-const uid = (base) => `${base}${Date.now().toString(36)}${seq++}`;
+const uid = base => `${base}${Date.now().toString(36)}${seq++}`;
 
 async function natsMonitorConnections() {
   const port = process.env.NATS_HTTP_PORT || 8222;
   const res = await fetch(`http://localhost:${port}/varz`);
-  if (!res.ok) throw new Error(`NATS monitor /varz returned HTTP ${res.status}`);
+  if (!res.ok)
+    throw new Error(`NATS monitor /varz returned HTTP ${res.status}`);
   return (await res.json()).connections;
+}
+
+async function waitForConnectionCountAtMost(maxCount, deadlineMs = 5000) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const count = await natsMonitorConnections();
+    if (count <= maxCount) return count;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return natsMonitorConnections();
 }
 
 // --- 1. Payload encoding per dataformat -----------------------------------
@@ -186,23 +227,36 @@ async function natsMonitorConnections() {
 const dataformatCases = [
   {
     dataformat: 'json',
-    injectProp: { p: 'payload', v: JSON.stringify({ a: 1, note: 'hello nats' }), vt: 'json' },
-    checkWire: (raw) => assert.deepEqual(JSON.parse(Buffer.from(raw).toString('utf8')), { a: 1, note: 'hello nats' }),
+    injectProp: {
+      p: 'payload',
+      v: JSON.stringify({ a: 1, note: 'hello nats' }),
+      vt: 'json',
+    },
+    checkWire: raw =>
+      assert.deepEqual(JSON.parse(Buffer.from(raw).toString('utf8')), {
+        a: 1,
+        note: 'hello nats',
+      }),
   },
   {
     dataformat: 'string',
     injectProp: { p: 'payload', v: 'plain string payload €', vt: 'str' },
-    checkWire: (raw) => assert.equal(Buffer.from(raw).toString('utf8'), 'plain string payload €'),
+    checkWire: raw =>
+      assert.equal(Buffer.from(raw).toString('utf8'), 'plain string payload €'),
   },
   {
     dataformat: 'buffer',
     injectProp: { p: 'payload', v: '[0,1,2,255,254,253]', vt: 'bin' },
-    checkWire: (raw) => assert.equal(Buffer.compare(Buffer.from(raw), Buffer.from([0, 1, 2, 255, 254, 253])), 0),
+    checkWire: raw =>
+      assert.equal(
+        Buffer.compare(Buffer.from(raw), Buffer.from([0, 1, 2, 255, 254, 253])),
+        0
+      ),
   },
 ];
 
 for (const c of dataformatCases) {
-  test(`publish: dataformat "${c.dataformat}" reaches NATS with the exact bytes`, async (t) => {
+  test(`publish: dataformat "${c.dataformat}" reaches NATS with the exact bytes`, async t => {
     if (!(await checkStack(t))) return;
 
     const id = uid(`df-${c.dataformat}-`);
@@ -213,7 +267,11 @@ for (const c of dataformatCases) {
 
     const nodes = [
       serverNode(srv),
-      publishNode(pub, { server: srv, dataformat: c.dataformat, datapointid: subject }),
+      publishNode(pub, {
+        server: srv,
+        dataformat: c.dataformat,
+        datapointid: subject,
+      }),
       injectNode(inj, pub, [c.injectProp]),
     ];
 
@@ -222,7 +280,11 @@ for (const c of dataformatCases) {
     let flowId;
     try {
       await comms.ready;
-      const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+      const connected = comms.waitForStatus(
+        pub,
+        d => d.fill === 'green',
+        15000
+      );
       flowId = await deployFlow(nodes);
       await connected;
 
@@ -255,7 +317,7 @@ const subjectCases = [
 ];
 
 for (const c of subjectCases) {
-  test(`publish: subject resolution - ${c.name}`, async (t) => {
+  test(`publish: subject resolution - ${c.name}`, async t => {
     if (!(await checkStack(t))) return;
 
     const id = uid(`subj-${c.expected}-`);
@@ -285,16 +347,26 @@ for (const c of subjectCases) {
     let flowId;
     try {
       await comms.ready;
-      const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+      const connected = comms.waitForStatus(
+        pub,
+        d => d.fill === 'green',
+        15000
+      );
       flowId = await deployFlow(nodes);
       await connected;
 
-      const expectedSubject = c.expected === 'configured' ? configuredSubject : topicSubject;
-      const otherSubject = c.expected === 'configured' ? topicSubject : configuredSubject;
+      const expectedSubject =
+        c.expected === 'configured' ? configuredSubject : topicSubject;
+      const otherSubject =
+        c.expected === 'configured' ? topicSubject : configuredSubject;
 
       const arrived = subscribeOnce(directNc, expectedSubject, 8000);
       await triggerInject(inj);
-      assert.equal(await arrived, probe, `message should have been published on ${expectedSubject}`);
+      assert.equal(
+        await arrived,
+        probe,
+        `message should have been published on ${expectedSubject}`
+      );
 
       // A message can never appear on a subject nothing published to under
       // NATS's exact-subject matching, so this rejection is a deterministic
@@ -314,7 +386,7 @@ for (const c of subjectCases) {
 
 // --- 3. Request/reply -------------------------------------------------------
 
-test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignored outside Reply mode', async (t) => {
+test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignored outside Reply mode', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('req-ok-');
@@ -345,7 +417,7 @@ test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignor
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -354,7 +426,11 @@ test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignor
     (async () => {
       for await (const m of sub) {
         const requestText = new TextDecoder().decode(m.data);
-        m.respond(new TextEncoder().encode(JSON.stringify({ ok: true, echoed: requestText })));
+        m.respond(
+          new TextEncoder().encode(
+            JSON.stringify({ ok: true, echoed: requestText })
+          )
+        );
         break;
       }
     })().catch(() => {});
@@ -371,7 +447,7 @@ test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignor
   }
 });
 
-test('publish: auto-reply forwards a service request and publishes the processed response back to its reply subject', async (t) => {
+test('publish: auto-reply forwards a service request and publishes the processed response back to its reply subject', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('auto-reply-');
@@ -409,7 +485,7 @@ test('publish: auto-reply forwards a service request and publishes the processed
       type: 'function',
       z: 'FLOW',
       name: 'process service request',
-      func: "msg.payload = `handled:${msg.payload}`; return msg;",
+      func: 'msg.payload = `handled:${msg.payload}`; return msg;',
       outputs: 1,
       noerr: 0,
       initialize: '',
@@ -424,12 +500,24 @@ test('publish: auto-reply forwards a service request and publishes the processed
   let flowId;
   try {
     await comms.ready;
-    const publishReady = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
-    const serviceReady = comms.waitForStatus(sub, (d) => d.fill === 'green', 15000);
+    const publishReady = comms.waitForStatus(
+      pub,
+      d => d.fill === 'green',
+      15000
+    );
+    const serviceReady = comms.waitForStatus(
+      sub,
+      d => d.fill === 'green',
+      15000
+    );
     flowId = await deployFlow(nodes);
     await Promise.all([publishReady, serviceReady]);
 
-    const response = await directNc.request(subject, new TextEncoder().encode('request'), { timeout: 5000 });
+    const response = await directNc.request(
+      subject,
+      new TextEncoder().encode('request'),
+      { timeout: 5000 }
+    );
     assert.equal(new TextDecoder().decode(response.data), 'handled:request');
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -438,7 +526,7 @@ test('publish: auto-reply forwards a service request and publishes the processed
   }
 });
 
-test('publish: requestTimeout with requestFallbackToPublish=false surfaces an error, no fallback publish happens', async (t) => {
+test('publish: requestTimeout with requestFallbackToPublish=false surfaces an error, no fallback publish happens', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('req-timeout-nofb-');
@@ -475,22 +563,45 @@ test('publish: requestTimeout with requestFallbackToPublish=false surfaces an er
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
     subjectSub = directNc.subscribe(subject);
     const observed = collectMessagesThroughSettle(subjectSub, 5000, 750);
     const debugCaught = comms.waitForDebug(dbg, 5000);
-    const errorStatus = comms.waitForStatus(pub, (d) => d.fill !== 'green', 5000);
+    const errorStatus = comms.waitForStatus(pub, d => d.fill !== 'green', 5000);
     await triggerInject(inj);
-    const [received, debugMsg, status] = await Promise.all([observed, debugCaught, errorStatus]);
+    const [received, debugMsg, status] = await Promise.all([
+      observed,
+      debugCaught,
+      errorStatus,
+    ]);
 
-    assert.ok(received[0].reply, 'the persistent subscriber should observe the original request first');
-    assert.equal(received.length, 1, 'no fallback publish should occur after the request timeout is handled');
-    assert.equal(debugMsg.error.code, 'TIMEOUT', 'msg.error should record a timeout, not a fallback');
-    assert.equal(debugMsg.fallback, undefined, 'no fallback publish should have happened');
-    assert.notEqual(status.fill, 'green', 'node status should show a non-connected/error state on timeout');
+    assert.ok(
+      received[0].reply,
+      'the persistent subscriber should observe the original request first'
+    );
+    assert.equal(
+      received.length,
+      1,
+      'no fallback publish should occur after the request timeout is handled'
+    );
+    assert.equal(
+      debugMsg.error.code,
+      'TIMEOUT',
+      'msg.error should record a timeout, not a fallback'
+    );
+    assert.equal(
+      debugMsg.fallback,
+      undefined,
+      'no fallback publish should have happened'
+    );
+    assert.notEqual(
+      status.fill,
+      'green',
+      'node status should show a non-connected/error state on timeout'
+    );
   } finally {
     if (subjectSub) subjectSub.unsubscribe();
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -499,7 +610,7 @@ test('publish: requestTimeout with requestFallbackToPublish=false surfaces an er
   }
 });
 
-test('publish: requestTimeout with requestFallbackToPublish=true publishes instead of erroring', async (t) => {
+test('publish: requestTimeout with requestFallbackToPublish=true publishes instead of erroring', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('req-timeout-fb-');
@@ -531,7 +642,7 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -540,18 +651,41 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
     subjectSub = directNc.subscribe(subject);
     const fallbackDelivered = collectMessages(subjectSub, 2, 5000);
     const debugCaught = comms.waitForDebug(dbg, 5000);
-    const backToGreen = comms.waitForStatus(pub, (d) => d.fill === 'green', 5000);
+    const backToGreen = comms.waitForStatus(pub, d => d.fill === 'green', 5000);
 
     await triggerInject(inj);
 
-    const [messages, debugMsg] = await Promise.all([fallbackDelivered, debugCaught, backToGreen]);
+    const [messages, debugMsg] = await Promise.all([
+      fallbackDelivered,
+      debugCaught,
+      backToGreen,
+    ]);
 
-    assert.equal(messages.length, 2, 'fallback should produce a second wire message after the original request');
-    assert.ok(messages[0].reply, 'the first wire message should be the request');
-    assert.equal(messages[1].reply, '', 'the second wire message should be the fallback publish');
-    assert.equal(new TextDecoder().decode(messages[1].data), probe, 'fallback publish should carry the original request payload');
+    assert.equal(
+      messages.length,
+      2,
+      'fallback should produce a second wire message after the original request'
+    );
+    assert.ok(
+      messages[0].reply,
+      'the first wire message should be the request'
+    );
+    assert.equal(
+      messages[1].reply,
+      '',
+      'the second wire message should be the fallback publish'
+    );
+    assert.equal(
+      new TextDecoder().decode(messages[1].data),
+      probe,
+      'fallback publish should carry the original request payload'
+    );
     assert.equal(debugMsg.fallback, 'publish');
-    assert.equal(debugMsg.error, undefined, 'fallback success should not leave msg.error set');
+    assert.equal(
+      debugMsg.error,
+      undefined,
+      'fallback success should not leave msg.error set'
+    );
   } finally {
     if (subjectSub) subjectSub.unsubscribe();
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -562,7 +696,7 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
 
 // --- 4. Headers --------------------------------------------------------------
 
-test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS headers', async (t) => {
+test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS headers', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('hdr-');
@@ -582,7 +716,11 @@ test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS
     }),
     injectNode(inj, pub, [
       { p: 'payload', v: 'header-test-payload', vt: 'str' },
-      { p: 'headers', v: JSON.stringify({ 'X-Dynamic': 'msg-value' }), vt: 'json' },
+      {
+        p: 'headers',
+        v: JSON.stringify({ 'X-Dynamic': 'msg-value' }),
+        vt: 'json',
+      },
     ]),
   ];
 
@@ -591,7 +729,7 @@ test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -612,7 +750,7 @@ test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS
 
 // --- 5. Node-RED contracts ---------------------------------------------------
 
-test('publish: a wired Catch node receives node.error(err, msg) with the original msg intact on failure', async (t) => {
+test('publish: a wired Catch node receives node.error(err, msg) with the original msg intact on failure', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('catch-');
@@ -627,7 +765,12 @@ test('publish: a wired Catch node receives node.error(err, msg) with the origina
     serverNode(srv),
     // No subject configured and no override -> deterministic, config-driven
     // failure on every input message (not a connectivity/timeout race).
-    publishNode(pub, { server: srv, dataformat: 'string', datapointid: '', enableTopicOverride: false }),
+    publishNode(pub, {
+      server: srv,
+      dataformat: 'string',
+      datapointid: '',
+      enableTopicOverride: false,
+    }),
     injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
     catchNode(cat, [pub], dbg),
     debugNode(dbg),
@@ -637,7 +780,7 @@ test('publish: a wired Catch node receives node.error(err, msg) with the origina
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -651,15 +794,23 @@ test('publish: a wired Catch node receives node.error(err, msg) with the origina
     // A 1-arg node.error(err) would just log and never reach this Catch node
     // at all, so the Catch node firing IS the proof of the 2-arg form.
     assert.ok(caughtMsg.error, 'caught message should carry the error');
-    assert.equal(caughtMsg.error.source.id, pub, 'error should be attributed to the publish node');
-    assert.equal(caughtMsg.payload, probe, 'the ORIGINAL message payload must survive into the Catch node');
+    assert.equal(
+      caughtMsg.error.source.id,
+      pub,
+      'error should be attributed to the publish node'
+    );
+    assert.equal(
+      caughtMsg.payload,
+      probe,
+      'the ORIGINAL message payload must survive into the Catch node'
+    );
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
   }
 });
 
-test('publish: a wired Complete node fires (done()) only after a real publish succeeds', async (t) => {
+test('publish: a wired Complete node fires (done()) only after a real publish succeeds', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('complete-');
@@ -673,7 +824,11 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
 
   const nodes = [
     serverNode(srv),
-    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    publishNode(pub, {
+      server: srv,
+      dataformat: 'string',
+      datapointid: subject,
+    }),
     injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
     completeNode(cmp, [pub], dbg),
     debugNode(dbg),
@@ -684,7 +839,7 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -692,10 +847,21 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
     const completed = comms.waitForDebug(dbg, 8000);
     await triggerInject(inj);
 
-    const [wirePayload, completeMsg] = await Promise.all([delivered, completed]);
+    const [wirePayload, completeMsg] = await Promise.all([
+      delivered,
+      completed,
+    ]);
 
-    assert.equal(wirePayload, probe, 'the message should genuinely have reached NATS');
-    assert.equal(completeMsg.complete.source.id, pub, 'complete event should be attributed to the publish node');
+    assert.equal(
+      wirePayload,
+      probe,
+      'the message should genuinely have reached NATS'
+    );
+    assert.equal(
+      completeMsg.complete.source.id,
+      pub,
+      'complete event should be attributed to the publish node'
+    );
     assert.equal(completeMsg.payload, probe);
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -710,7 +876,7 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
 // both the original message AND a JSON trace event to that destination
 // subject) so these assert on the real wire trace event, not just "no throw".
 
-test('publish: server-level enableTracing makes a plain publish() emit a real NATS trace event and still deliver the message', async (t) => {
+test('publish: server-level enableTracing makes a plain publish() emit a real NATS trace event and still deliver the message', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('trace-pub-on-');
@@ -723,7 +889,11 @@ test('publish: server-level enableTracing makes a plain publish() emit a real NA
 
   const nodes = [
     serverNode(srv, { enableTracing: true, traceDestination: traceSubject }),
-    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    publishNode(pub, {
+      server: srv,
+      dataformat: 'string',
+      datapointid: subject,
+    }),
     injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
   ];
 
@@ -732,7 +902,7 @@ test('publish: server-level enableTracing makes a plain publish() emit a real NA
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -741,9 +911,15 @@ test('publish: server-level enableTracing makes a plain publish() emit a real NA
     await triggerInject(inj);
     const [trace, wirePayload] = await Promise.all([traceEvent, delivered]);
 
-    assert.equal(wirePayload, probe, 'the real message must still be delivered, not swallowed by tracing');
+    assert.equal(
+      wirePayload,
+      probe,
+      'the real message must still be delivered, not swallowed by tracing'
+    );
     const traceJson = JSON.parse(trace);
-    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [
+      traceSubject,
+    ]);
     assert.ok(Array.isArray(traceJson.events) && traceJson.events.length > 0);
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -752,7 +928,7 @@ test('publish: server-level enableTracing makes a plain publish() emit a real NA
   }
 });
 
-test('publish: enableTracing off (the default) never emits a trace event', async (t) => {
+test('publish: enableTracing off (the default) never emits a trace event', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('trace-pub-off-');
@@ -765,7 +941,11 @@ test('publish: enableTracing off (the default) never emits a trace event', async
 
   const nodes = [
     serverNode(srv),
-    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    publishNode(pub, {
+      server: srv,
+      dataformat: 'string',
+      datapointid: subject,
+    }),
     injectNode(inj, pub, [{ p: 'payload', v: probe, vt: 'str' }]),
   ];
 
@@ -774,7 +954,7 @@ test('publish: enableTracing off (the default) never emits a trace event', async
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -782,7 +962,11 @@ test('publish: enableTracing off (the default) never emits a trace event', async
     const delivered = subscribeOnce(directNc, subject, 8000);
     await triggerInject(inj);
 
-    await assert.rejects(noTrace, /Timed out/, 'no trace event should be emitted when tracing is off');
+    await assert.rejects(
+      noTrace,
+      /Timed out/,
+      'no trace event should be emitted when tracing is off'
+    );
     assert.equal(await delivered, probe);
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
@@ -791,7 +975,7 @@ test('publish: enableTracing off (the default) never emits a trace event', async
   }
 });
 
-test('publish: server-level enableTracing also threads through mode "request"', async (t) => {
+test('publish: server-level enableTracing also threads through mode "request"', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('trace-req-on-');
@@ -822,7 +1006,7 @@ test('publish: server-level enableTracing also threads through mode "request"', 
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -840,9 +1024,15 @@ test('publish: server-level enableTracing also threads through mode "request"', 
     await triggerInject(inj);
     const [trace, debugMsg] = await Promise.all([traceEvent, debugCaught]);
 
-    assert.equal(debugMsg.payload, 'pong', 'the request/reply round trip must still complete under tracing');
+    assert.equal(
+      debugMsg.payload,
+      'pong',
+      'the request/reply round trip must still complete under tracing'
+    );
     const traceJson = JSON.parse(trace);
-    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [traceSubject]);
+    assert.deepEqual(traceJson.request.header['Nats-Trace-Dest'], [
+      traceSubject,
+    ]);
   } finally {
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
@@ -852,7 +1042,7 @@ test('publish: server-level enableTracing also threads through mode "request"', 
 
 // --- 7. Teardown / redeploy leak check ---------------------------------------
 
-test('publish: redeploying the flow repeatedly does not grow NATS connection count', async (t) => {
+test('publish: redeploying the flow repeatedly does not grow NATS connection count', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('teardown-');
@@ -862,7 +1052,11 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
   const inj = `${id}inj`;
   const buildNodes = () => [
     serverNode(srv),
-    publishNode(pub, { server: srv, dataformat: 'string', datapointid: subject }),
+    publishNode(pub, {
+      server: srv,
+      dataformat: 'string',
+      datapointid: subject,
+    }),
     injectNode(inj, pub, [{ p: 'payload', v: 'ping', vt: 'str' }]),
   ];
 
@@ -872,7 +1066,11 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
     const baseline = await natsMonitorConnections();
 
     for (let i = 0; i < 3; i++) {
-      const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+      const connected = comms.waitForStatus(
+        pub,
+        d => d.fill === 'green',
+        15000
+      );
       const flowId = await deployFlow(buildNodes());
       await connected;
 
@@ -880,17 +1078,17 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
       try {
         const received = subscribeOnce(directNc, subject, 5000);
         await triggerInject(inj);
-        assert.equal(await received, 'ping', `iteration ${i}: publish should still work after redeploy`);
+        assert.equal(
+          await received,
+          'ping',
+          `iteration ${i}: publish should still work after redeploy`
+        );
       } finally {
         await directNc.close().catch(() => {});
       }
 
       await deleteFlow(flowId);
-      // Bounded settle window: the server-manager's close handler calls
-      // connection.close() without awaiting it, so give the real socket
-      // teardown a moment to complete before the next deploy or the final
-      // connection count check.
-      await new Promise((r) => setTimeout(r, 1500));
+      await waitForConnectionCountAtMost(baseline + 1);
     }
 
     const final = await natsMonitorConnections();
@@ -933,7 +1131,7 @@ function respondOnce(nc, subject, payload) {
   return sub;
 }
 
-test('publish: mode "requestMany" collects every real reply within the window (strategy "timer" waits out the full maxWait)', async (t) => {
+test('publish: mode "requestMany" collects every real reply within the window (strategy "timer" waits out the full maxWait)', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('rm-ok-');
@@ -966,7 +1164,7 @@ test('publish: mode "requestMany" collects every real reply within the window (s
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -981,10 +1179,11 @@ test('publish: mode "requestMany" collects every real reply within the window (s
     const elapsed = Date.now() - start;
 
     assert.equal(debugMsg.replyCount, 3);
-    assert.deepEqual(
-      [...debugMsg.payload].sort(),
-      ['responder-0', 'responder-1', 'responder-2']
-    );
+    assert.deepEqual([...debugMsg.payload].sort(), [
+      'responder-0',
+      'responder-1',
+      'responder-2',
+    ]);
     assert.ok(Array.isArray(debugMsg.replies) && debugMsg.replies.length === 3);
     // "timer" strategy: confirmed empirically to always wait out the full
     // window even when every reply lands almost instantly - assert that,
@@ -998,14 +1197,14 @@ test('publish: mode "requestMany" collects every real reply within the window (s
       `"timer" strategy should not run far past its ${maxWait}ms window; took ${elapsed}ms`
     );
   } finally {
-    subs.forEach((s) => s.unsubscribe());
+    subs.forEach(s => s.unsubscribe());
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
     await directNc.close().catch(() => {});
   }
 });
 
-test('publish: mode "requestMany" does not hang past the window when a subscriber never replies', async (t) => {
+test('publish: mode "requestMany" does not hang past the window when a subscriber never replies', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('rm-silent-');
@@ -1037,12 +1236,16 @@ test('publish: mode "requestMany" does not hang past the window when a subscribe
   // NoResponders) but nobody ever calls respond() - the window must still
   // bound the wait and the node must still complete, with a partial result.
   const silentSub = directNc.subscribe(subject);
-  (async () => { for await (const m of silentSub) { void m; /* never respond */ } })().catch(() => {});
+  (async () => {
+    for await (const m of silentSub) {
+      void m; /* never respond */
+    }
+  })().catch(() => {});
   const repliers = [respondOnce(directNc, subject, 'the-one-that-replies')];
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -1061,14 +1264,14 @@ test('publish: mode "requestMany" does not hang past the window when a subscribe
     );
   } finally {
     silentSub.unsubscribe();
-    repliers.forEach((s) => s.unsubscribe());
+    repliers.forEach(s => s.unsubscribe());
     if (flowId) await deleteFlow(flowId).catch(() => {});
     comms.close();
     await directNc.close().catch(() => {});
   }
 });
 
-test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the configured default', async (t) => {
+test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the configured default', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('rm-override-');
@@ -1103,11 +1306,15 @@ test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the con
   // Interest only (no reply) - if the msg-level override were ignored, this
   // test would take ~8s (the config default) instead of ~0.7s.
   const silentSub = directNc.subscribe(subject);
-  (async () => { for await (const m of silentSub) { void m; /* never respond */ } })().catch(() => {});
+  (async () => {
+    for await (const m of silentSub) {
+      void m; /* never respond */
+    }
+  })().catch(() => {});
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 
@@ -1130,7 +1337,7 @@ test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the con
   }
 });
 
-test('publish: mode "requestMany" surfaces real NATS headers on each collected reply', async (t) => {
+test('publish: mode "requestMany" surfaces real NATS headers on each collected reply', async t => {
   if (!(await checkStack(t))) return;
 
   const id = uid('rm-headers-');
@@ -1169,7 +1376,7 @@ test('publish: mode "requestMany" surfaces real NATS headers on each collected r
   let flowId;
   try {
     await comms.ready;
-    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    const connected = comms.waitForStatus(pub, d => d.fill === 'green', 15000);
     flowId = await deployFlow(nodes);
     await connected;
 

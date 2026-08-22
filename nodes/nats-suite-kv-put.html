@@ -22,7 +22,7 @@
       valueFrom: { value: 'payload' },
       stringifyJSON: { value: true },
       createMarkerTTL: { value: '' },
-      debug: { value: false }
+      debug: { value: false },
     },
     inputs: 1,
     outputs: 1,
@@ -32,11 +32,18 @@
       return this.name || `kv put (${this.bucket || 'bucket'})`;
     },
     paletteLabel: 'nats kv put',
-    oneditprepare: function() {
+    oneditprepare: function () {
       // Operation handler
-      $('#node-input-operation').on('change', function() {
+      $('#node-input-operation').on('change', function () {
         const op = $(this).val();
-        if (['bucket-create', 'bucket-info', 'bucket-delete', 'bucket-list'].includes(op)) {
+        if (
+          [
+            'bucket-create',
+            'bucket-info',
+            'bucket-delete',
+            'bucket-list',
+          ].includes(op)
+        ) {
           $('#key-value-config').slideUp(200);
         } else {
           $('#key-value-config').slideDown(200);
@@ -46,32 +53,34 @@
             $('#value-config').slideUp(200);
           }
         }
-        $('#create-marker-ttl-row, #create-marker-ttl-tip').toggle(op === 'create');
+        $('#create-marker-ttl-row, #create-marker-ttl-tip').toggle(
+          op === 'create'
+        );
       });
-      
+
       // Key source handler
-      $('#node-input-keyFrom').on('change', function() {
+      $('#node-input-keyFrom').on('change', function () {
         if ($(this).val() === 'config') {
           $('#key-config-row').slideDown(200);
         } else {
           $('#key-config-row').slideUp(200);
         }
       });
-      
+
       // Value source handler
-      $('#node-input-valueFrom').on('change', function() {
+      $('#node-input-valueFrom').on('change', function () {
         if ($(this).val() === 'config') {
           $('#value-config-row').slideDown(200);
         } else {
           $('#value-config-row').slideUp(200);
         }
       });
-      
+
       // Trigger initial state
       $('#node-input-operation').trigger('change');
       $('#node-input-keyFrom').trigger('change');
       $('#node-input-valueFrom').trigger('change');
-    }
+    },
   });
 </script>
 
@@ -199,32 +208,32 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-kv-put">
-Store, update, or delete values in a NATS JetStream Key-Value bucket.
+  Store, update, or delete values in a NATS JetStream Key-Value bucket.
 
-### Operations
+  ### Operations
 
- - `put` - create or update a key
- - `create` - create only if the key doesn't exist
- - `update` - update only if the key exists
- - `delete` - soft delete (preserves history)
- - `purge` - complete removal with history
- - `bucket-create` - create a new bucket
- - `bucket-info` - get bucket information
- - `bucket-delete` - delete a bucket
- - `bucket-list` - list all buckets
+  - `put` - create or update a key
+  - `create` - create only if the key doesn't exist
+  - `update` - update only if the key exists
+  - `delete` - soft delete (preserves history)
+  - `purge` - complete removal with history
+  - `bucket-create` - create a new bucket
+  - `bucket-info` - get bucket information
+  - `bucket-delete` - delete a bucket
+  - `bucket-list` - list all buckets
 
-The operation can be overridden dynamically by setting `msg.operation` to any of the values above.
+  The operation can be overridden dynamically by setting `msg.operation` to any of the values above.
 
-### Marker TTL
+  ### Marker TTL
 
-Two distinct settings, both required together for a per-key marker TTL to work:
+  Two distinct settings, both required together for a per-key marker TTL to work:
 
- - **Bucket Marker TTL** (bucket setting, milliseconds) - enables the feature for the whole bucket. Cannot be disabled once set to a non-zero value.
- - **Marker TTL** (`create` operation only, Go duration string like `10s`/`1m`/`1h`) - sets how long *this specific key's* delete marker survives after the key is removed. Requires the bucket setting above to be non-zero, or the server rejects the create. Overridable via `msg.markerTTL`.
+  - **Bucket Marker TTL** (bucket setting, milliseconds) - enables the feature for the whole bucket. Cannot be disabled once set to a non-zero value.
+  - **Marker TTL** (`create` operation only, Go duration string like `10s`/`1m`/`1h`) - sets how long _this specific key's_ delete marker survives after the key is removed. Requires the bucket setting above to be non-zero, or the server rejects the create. Overridable via `msg.markerTTL`.
 
-### Outputs
+  ### Outputs
 
-: revision (number) : the new revision number
-: operation (string) : `"PUT"`, `"DEL"`, or `"PURGE"`
-: key (string) : the key that was modified
+  : revision (number) : the new revision number
+  : operation (string) : `"PUT"`, `"DEL"`, or `"PURGE"`
+  : key (string) : the key that was modified
 </script>

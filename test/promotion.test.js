@@ -159,7 +159,11 @@ test('promoted nodes balance connection users and status listeners on close', as
   });
 
   assert.deepEqual(users, new Set(nodes.map(node => node.id)));
-  assert.equal(listeners.size, 1, 'service should own one status listener');
+  assert.equal(
+    listeners.size,
+    types.length,
+    'object-get, object-put, and service should each own a status listener'
+  );
 
   for (const node of nodes) {
     await node.handlers.get('close').call(node, () => {});

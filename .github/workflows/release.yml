@@ -1,32 +1,45 @@
-name: CI
+name: Release
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: read
+  id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
-  static:
-    name: Static checks
+  publish:
+    name: Publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
       - run: npm ci
+      - name: Verify package.json matches the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: node -e "const pkg=require('./package.json'); const tag=process.env.TAG.replace(/^v/,''); if (pkg.version !== tag) throw new Error(pkg.version + ' !== ' + tag)"
+      - run: npm audit --omit=dev
       - run: npm run lint
       - run: npm run format:check
-      - run: npm audit --omit=dev
+      - name: Run tests against Docker stack
+        run: |
+          export NODERED_UID="$(id -u)"
+          export NODERED_GID="$(id -g)"
+          npm test
       - name: Verify packed package contents
         run: |
           npm pack --dry-run --ignore-scripts --json > /tmp/package-manifest.json
           node <<'NODE'
           const parsed = require('/tmp/package-manifest.json');
+          // npm <12 prints a top-level array; npm 12+ prints an object keyed by package name.
           const manifest = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
           const allowed = /^(CHANGELOG\.md|LICENSE|README\.md|package\.json)$|^(?:nodes|lib|examples)\//;
           const unexpected = manifest.files.map((file) => file.path).filter((file) => !allowed.test(file));
@@ -35,23 +48,5 @@ jobs:
           }
           console.log(`Verified ${manifest.entryCount} package files`);
           NODE
-
-  test:
-    name: Node-RED + NATS tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      matrix:
-        node-version: [22.9.0, 24]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-      - run: npm ci
-      - name: Run tests against Docker stack
-        run: |
-          export NODERED_UID="$(id -u)"
-          export NODERED_GID="$(id -g)"
-          npm test
+      # Trusted publishing supplies the credential over OIDC — no npm token.
+      - run: npm publish --access public --provenance

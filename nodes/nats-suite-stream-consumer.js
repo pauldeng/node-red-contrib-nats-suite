@@ -41,6 +41,7 @@ module.exports = function (RED) {
     let fetchTask = null;
     let activeMessages = null;
     let closing = false;
+    let lastStatusText = '';
 
     const setGreenStatus = (text, shape = 'dot') => {
       if (node.serverConfig.connectionStatus !== 'connected') return false;
@@ -117,7 +118,6 @@ module.exports = function (RED) {
           throw err;
         }
 
-        // Check if createOnInit is enabled (default to true for backwards compatibility)
         const createOnInit = config.createOnInit !== false;
 
         // Try to get existing consumer first
@@ -126,7 +126,11 @@ module.exports = function (RED) {
             config.streamName,
             config.consumerName
           );
-          node.log(`[STREAM CONSUMER] Consumer exists: ${config.consumerName}`);
+          if (isDebug) {
+            node.log(
+              `[STREAM CONSUMER] Consumer exists: ${config.consumerName}`
+            );
+          }
         } catch (err) {
           // Consumer doesn't exist
           if (
@@ -168,9 +172,11 @@ module.exports = function (RED) {
                   config.startTime || new Date().toISOString();
               }
 
-              node.log(
-                `[STREAM CONSUMER] Creating consumer: ${config.consumerName}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM CONSUMER] Creating consumer: ${config.consumerName}`
+                );
+              }
               // pedantic is a separate 3rd argument (ConsumerCreateOptions),
               // not a field on the consumer config itself.
               await jsm.consumers.add(config.streamName, consumerConfig, {
@@ -180,9 +186,11 @@ module.exports = function (RED) {
                 config.streamName,
                 config.consumerName
               );
-              node.log(
-                `[STREAM CONSUMER] Consumer created: ${config.consumerName}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM CONSUMER] Consumer created: ${config.consumerName}`
+                );
+              }
             } else {
               // createOnInit is disabled, consumer must exist
               node.status({
@@ -211,9 +219,6 @@ module.exports = function (RED) {
     // Helper: Process a single message
     const processMessage = async (send, jetMsg) => {
       try {
-        // Decode payload
-        const data = jetMsg.string();
-
         if (isDebug) {
           node.log(
             `[STREAM CONSUMER] Processing message from subject: ${jetMsg.subject}`
@@ -233,7 +238,7 @@ module.exports = function (RED) {
           }
           const err = new Error('JSON parsing failed', { cause: parseError });
           err.code = 'JSON_PARSE_ERROR';
-          err.rawData = data;
+          err.rawData = jetMsg.data;
           throw err;
         }
 
@@ -264,7 +269,9 @@ module.exports = function (RED) {
           outMsg.ack = () => {
             try {
               jetMsg.ack();
-              node.log(`[STREAM CONSUMER] ACK: seq ${jetMsg.seq}`);
+              if (isDebug) {
+                node.log(`[STREAM CONSUMER] ACK: seq ${jetMsg.seq}`);
+              }
             } catch (err) {
               node.warn(`Failed to ACK message: ${err.message}`);
             }
@@ -277,7 +284,9 @@ module.exports = function (RED) {
               } else {
                 jetMsg.nak();
               }
-              node.log(`[STREAM CONSUMER] NAK: seq ${jetMsg.seq}`);
+              if (isDebug) {
+                node.log(`[STREAM CONSUMER] NAK: seq ${jetMsg.seq}`);
+              }
             } catch (err) {
               node.warn(`Failed to NAK message: ${err.message}`);
             }
@@ -286,7 +295,9 @@ module.exports = function (RED) {
           outMsg.term = () => {
             try {
               jetMsg.term();
-              node.log(`[STREAM CONSUMER] TERM: seq ${jetMsg.seq}`);
+              if (isDebug) {
+                node.log(`[STREAM CONSUMER] TERM: seq ${jetMsg.seq}`);
+              }
             } catch (err) {
               node.warn(`Failed to TERM message: ${err.message}`);
             }
@@ -295,7 +306,9 @@ module.exports = function (RED) {
           outMsg.inProgress = () => {
             try {
               jetMsg.working();
-              node.log(`[STREAM CONSUMER] IN-PROGRESS: seq ${jetMsg.seq}`);
+              if (isDebug) {
+                node.log(`[STREAM CONSUMER] IN-PROGRESS: seq ${jetMsg.seq}`);
+              }
             } catch (err) {
               node.warn(`Failed to mark in-progress: ${err.message}`);
             }
@@ -314,13 +327,17 @@ module.exports = function (RED) {
         }
         send(outMsg);
 
-        // Update status
+        // Update status only when pending count text changes
         const pending = toNumber(jetMsg.info.pending) || 0;
-        node.status({
-          fill: 'blue',
-          shape: 'dot',
-          text: `${config.consumerName} (${pending} pending)`,
-        });
+        const statusText = `${config.consumerName} (${pending} pending)`;
+        if (statusText !== lastStatusText) {
+          lastStatusText = statusText;
+          node.status({
+            fill: 'blue',
+            shape: 'dot',
+            text: statusText,
+          });
+        }
 
         // Clear any existing idle timeout
         if (idleTimeout) {
@@ -330,8 +347,10 @@ module.exports = function (RED) {
 
         // Set timeout to change to idle status after 2 seconds
         idleTimeout = setTimeout(() => {
-          if (!closing && !isConsuming && !isPaused)
+          if (!closing && !isConsuming && !isPaused) {
             setGreenStatus(`${config.consumerName} (idle)`, 'ring');
+            lastStatusText = '';
+          }
           idleTimeout = null;
         }, 2000);
       } catch (err) {
@@ -342,7 +361,8 @@ module.exports = function (RED) {
 
     // Helper: Consume messages
     const consumeMessages = async (msg, send) => {
-      if (!consumer || isConsuming || isPaused || closing) return;
+      if (!consumer || isPaused || closing) return;
+      if (isConsuming) throw new Error('consume already in progress');
 
       try {
         isConsuming = true;
@@ -362,9 +382,12 @@ module.exports = function (RED) {
           text: `${config.consumerName} (waiting)`,
         });
 
-        node.log(
-          `[STREAM CONSUMER] Fetching ${batch} messages (max wait: ${maxWait}ms)`
-        );
+        if (isDebug) {
+          node.log(
+            `[STREAM CONSUMER] Fetching ${batch} messages (max wait: ${maxWait}ms)`
+          );
+        }
+        lastStatusText = '';
 
         // Pull overflow/prioritized-pull fields (group/min_pending/
         // min_ack_pending/priority) were already reachable via a raw
@@ -402,7 +425,9 @@ module.exports = function (RED) {
         for await (const jetMsg of messages) {
           // Check if paused during iteration
           if (isPaused || closing) {
-            node.log(`[STREAM CONSUMER] Paused during consumption`);
+            if (isDebug) {
+              node.log(`[STREAM CONSUMER] Paused during consumption`);
+            }
             break;
           }
           try {
@@ -419,7 +444,9 @@ module.exports = function (RED) {
         }
 
         if (count > 0) {
-          node.log(`[STREAM CONSUMER] Processed ${count} messages`);
+          if (isDebug) {
+            node.log(`[STREAM CONSUMER] Processed ${count} messages`);
+          }
         } else if (!isPaused) {
           // No messages found after timeout, change to idle status (green)
           setGreenStatus(`${config.consumerName} (idle)`, 'ring');
@@ -720,7 +747,9 @@ module.exports = function (RED) {
               shape: 'ring',
               text: `${consumerName} (paused)`,
             });
-            node.log(`[STREAM CONSUMER] Consumer paused: ${consumerName}`);
+            if (isDebug) {
+              node.log(`[STREAM CONSUMER] Consumer paused: ${consumerName}`);
+            }
             break;
           }
 
@@ -734,7 +763,9 @@ module.exports = function (RED) {
               ...result,
             };
             setGreenStatus(`${consumerName} (resumed)`);
-            node.log(`[STREAM CONSUMER] Consumer resumed: ${consumerName}`);
+            if (isDebug) {
+              node.log(`[STREAM CONSUMER] Consumer resumed: ${consumerName}`);
+            }
             break;
           }
 
@@ -774,9 +805,11 @@ module.exports = function (RED) {
               text: `${consumerName} (${pending}p/${ackPending}ap)`,
             });
 
-            node.log(
-              `[STREAM CONSUMER] Monitor: pending=${pending}, ack_pending=${ackPending}, delivered=${delivered}`
-            );
+            if (isDebug) {
+              node.log(
+                `[STREAM CONSUMER] Monitor: pending=${pending}, ack_pending=${ackPending}, delivered=${delivered}`
+              );
+            }
             break;
           }
 

@@ -76,7 +76,9 @@ module.exports = function (RED) {
             try {
               await node.config.reconnect();
             } catch (err) {
-              done(new Error(`reconnect after set-servers failed: ${err.message}`));
+              done(
+                new Error(`reconnect after set-servers failed: ${err.message}`)
+              );
               return;
             }
           }

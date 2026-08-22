@@ -466,58 +466,58 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-stream-consumer">
-Consumes messages from NATS JetStream with acknowledgment control.
+  Consumes messages from NATS JetStream with acknowledgment control.
 
-### Inputs
+  ### Inputs
 
-: config (object, optional) : Native `ConsumerConfig` for create/add operations
-: options (object, optional) : Native create, stream info/purge, or fetch options for the selected operation
-: until (string, optional) : ISO date/time for the server-side pause operation; omit to pause indefinitely
-: seq (number, optional) : Get Message operation - retrieve by stream sequence (exactly one of `seq`/`lastBySubject` required)
-: lastBySubject (string, optional) : Get Message operation - retrieve the last message stored for this subject
-: useDirectGet (boolean, optional) : Get Message operation - overrides the "Use Direct Get" checkbox per-message
-: priorityGroups (string, optional) : Create/Add operation - comma-separated priority group names, overrides the configured field
-: priorityPolicy (string, optional) : Create/Add operation - `overflow`/`pinned_client`/`prioritized`, overrides the configured field
-: priorityTimeout (string, optional) : Create/Add operation - duration string (e.g. `30s`), overrides the configured field
-: pedantic (boolean, optional) : Create/Add operation - overrides the configured "Pedantic" checkbox; `msg.options.pedantic` wins over this if set
+  : config (object, optional) : Native `ConsumerConfig` for create/add operations
+  : options (object, optional) : Native create, stream info/purge, or fetch options for the selected operation
+  : until (string, optional) : ISO date/time for the server-side pause operation; omit to pause indefinitely
+  : seq (number, optional) : Get Message operation - retrieve by stream sequence (exactly one of `seq`/`lastBySubject` required)
+  : lastBySubject (string, optional) : Get Message operation - retrieve the last message stored for this subject
+  : useDirectGet (boolean, optional) : Get Message operation - overrides the "Use Direct Get" checkbox per-message
+  : priorityGroups (string, optional) : Create/Add operation - comma-separated priority group names, overrides the configured field
+  : priorityPolicy (string, optional) : Create/Add operation - `overflow`/`pinned_client`/`prioritized`, overrides the configured field
+  : priorityTimeout (string, optional) : Create/Add operation - duration string (e.g. `30s`), overrides the configured field
+  : pedantic (boolean, optional) : Create/Add operation - overrides the configured "Pedantic" checkbox; `msg.options.pedantic` wins over this if set
 
-### Outputs
+  ### Outputs
 
-: payload (any) : Message payload
-: sequence (number) : Message sequence number
-: ack (function) : Acknowledge message
-: nak (function) : Negative acknowledge (retry)
-: term (function) : Terminate (no retry)
+  : payload (any) : Message payload
+  : sequence (number) : Message sequence number
+  : ack (function) : Acknowledge message
+  : nak (function) : Negative acknowledge (retry)
+  : term (function) : Terminate (no retry)
 
-### Get Message
+  ### Get Message
 
-Retrieves a single stored message without a consumer, by stream sequence or
-by the last message on a subject. Set `msg.stream` (or the Stream Name field
-while in Consume mode), and exactly one of `msg.seq` or `msg.lastBySubject`.
+  Retrieves a single stored message without a consumer, by stream sequence or
+  by the last message on a subject. Set `msg.stream` (or the Stream Name field
+  while in Consume mode), and exactly one of `msg.seq` or `msg.lastBySubject`.
 
-`jsm.streams.getMessage()` (the default) always works. Checking "Use Direct
-Get" switches to the faster `jsm.direct.getMessage()`, which requires the
-target stream to have been created with `allow_direct: true` (the "Allow
-Direct" checkbox on `nats-suite-stream-publisher`) - the server rejects the
-request with a real error otherwise, it does not silently fall back.
+  `jsm.streams.getMessage()` (the default) always works. Checking "Use Direct
+  Get" switches to the faster `jsm.direct.getMessage()`, which requires the
+  target stream to have been created with `allow_direct: true` (the "Allow
+  Direct" checkbox on `nats-suite-stream-publisher`) - the server rejects the
+  request with a real error otherwise, it does not silently fall back.
 
-No matching message errors rather than returning an empty payload.
+  No matching message errors rather than returning an empty payload.
 
-### Priority Groups & Pull Overflow
+  ### Priority Groups & Pull Overflow
 
-Priority Policy/Groups/Timeout and Pedantic apply at consumer creation
-(`priority_groups`/`priority_policy`/`priority_timeout` on `ConsumerConfig`,
-`pedantic` as a separate create-time option, not a config field). Pull
-Group/Priority/Min Pending/Min Ack Pending are per-fetch defaults for a
-consumer already created with a matching priority policy - a
-`msg.options` override always wins over these configured defaults.
+  Priority Policy/Groups/Timeout and Pedantic apply at consumer creation
+  (`priority_groups`/`priority_policy`/`priority_timeout` on `ConsumerConfig`,
+  `pedantic` as a separate create-time option, not a config field). Pull
+  Group/Priority/Min Pending/Min Ack Pending are per-fetch defaults for a
+  consumer already created with a matching priority policy - a
+  `msg.options` override always wins over these configured defaults.
 
-### Acknowledgment
+  ### Acknowledgment
 
-```
-// In a function node:
-msg.ack();   // Success
-msg.nak();   // Retry later
-msg.term();  // Don't retry
-```
+  ```
+  // In a function node:
+  msg.ack();   // Success
+  msg.nak();   // Retry later
+  msg.term();  // Don't retry
+  ```
 </script>

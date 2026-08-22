@@ -20,7 +20,7 @@ const {
   subscribeOnce,
 } = require('./lib/harness');
 
-test('publish -> real NATS -> subscribe round-trip, with connected status', async (t) => {
+test('publish -> real NATS -> subscribe round-trip, with connected status', async t => {
   const skipReason = await ensureStackUp();
   if (skipReason) {
     t.skip(skipReason);
@@ -105,8 +105,12 @@ test('publish -> real NATS -> subscribe round-trip, with connected status', asyn
 
     // Register status waiters before deploying, so a fast transition to
     // "connected" right after deploy can't be missed.
-    const connected = (d) => d.fill === 'green';
-    const serverConnected = comms.waitForStatus('harness-srv', connected, 20000);
+    const connected = d => d.fill === 'green';
+    const serverConnected = comms.waitForStatus(
+      'harness-srv',
+      connected,
+      20000
+    );
     const pubConnected = comms.waitForStatus('harness-pub', connected, 20000);
     const subConnected = comms.waitForStatus('harness-sub', connected, 20000);
 
@@ -120,9 +124,16 @@ test('publish -> real NATS -> subscribe round-trip, with connected status', asyn
 
     await triggerInject('harness-inject');
 
-    const [debugMsg, directPayload] = await Promise.all([debugCaught, directCaught]);
+    const [debugMsg, directPayload] = await Promise.all([
+      debugCaught,
+      directCaught,
+    ]);
 
-    assert.equal(directPayload, probeValue, 'direct NATS subscription should see the exact published payload');
+    assert.equal(
+      directPayload,
+      probeValue,
+      'direct NATS subscription should see the exact published payload'
+    );
     assert.equal(
       debugMsg.payload,
       probeValue,

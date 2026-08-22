@@ -1,13 +1,13 @@
 node_modules/
 bin/
 *.log
+*.tgz
 .DS_Store
 *.swp
 *.swo
 *~
 .npm
 .eslintcache
-package-lock.json
 yarn.lock
 
 # Ignore everything in examples directory except flows.json
@@ -15,4 +15,3 @@ node-red/**
 !node-red/flows.json
 
 .env
-RENOVATION-PLAN.md

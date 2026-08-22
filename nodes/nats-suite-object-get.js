@@ -3,6 +3,7 @@
 const { Objm } = require('@nats-io/obj');
 const { nanos } = require('@nats-io/nats-core');
 const { resolveServer } = require('../lib/connect');
+const { attachStatus } = require('../lib/status');
 
 module.exports = function (RED) {
   function NatsObjectGetNode(config) {
@@ -12,32 +13,33 @@ module.exports = function (RED) {
     this.serverConfig = resolveServer(RED, node, config);
     if (!this.serverConfig) return;
 
-    // Bucket configuration - can use bucketConfig node OR direct settings
     this.bucket = config.bucket || '';
-    this.bucketConfig = config.bucketConfig
-      ? RED.nodes.getNode(config.bucketConfig)
-      : null;
-
-    if (this.bucketConfig) {
-      this.bucket = this.bucketConfig.bucket;
-      this.serverConfig = this.bucketConfig.serverConfig;
-    } else {
-      this.description = config.description || '';
-      this.maxAge = parseInt(config.maxAge) || 0;
-      this.maxBytes = parseInt(config.maxBytes) || 0;
-      this.storage = config.storage || 'file';
-      this.replicas = parseInt(config.replicas) || 1;
-      this.compression = !!config.compression;
-    }
+    this.description = config.description || '';
+    this.maxAge = parseInt(config.maxAge) || 0;
+    this.maxBytes = parseInt(config.maxBytes) || 0;
+    this.storage = config.storage || 'file';
+    this.replicas = parseInt(config.replicas) || 1;
+    this.compression = !!config.compression;
 
     let objectStore = null;
     let watcher = null;
     let watchTask = null;
     let watchSetupTask = null;
+    let pendingWatchStart = null;
     let isWatching = false;
     let statusTimer = null;
     let closing = false;
     const isDebug = config.debug || this.serverConfig.debug || false;
+
+    const detachStatus = attachStatus(node, this.serverConfig, {
+      connected: () => {
+        if (isWatching) {
+          node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+        } else if (config.operation !== 'watch') {
+          node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+        }
+      },
+    });
 
     // ObjectInfo.headers is a MsgHdrs instance (@nats-io/nats-core), not a
     // plain object - flatten it for msg.metadata.
@@ -56,11 +58,6 @@ module.exports = function (RED) {
     // exists), so it replaces the old try-bare-open-then-create fallback.
     const getObjectStore = async () => {
       if (objectStore) return objectStore;
-
-      if (node.bucketConfig) {
-        objectStore = await node.bucketConfig.getObjectStore();
-        return objectStore;
-      }
 
       const nc = await node.serverConfig.getConnection();
       const createOptions = {
@@ -82,69 +79,93 @@ module.exports = function (RED) {
 
     // Helper: Start watching the bucket for object changes. Mirrors
     // nats-suite-kv-get.js's startWatch/stopWatch shape exactly.
-    const startWatch = async () => {
-      if (isWatching) return;
+    const startWatch = () => {
+      if (isWatching) return Promise.resolve();
+      if (pendingWatchStart) return pendingWatchStart;
 
-      const os = await getObjectStore();
-
-      const watchOptions = {};
-      if (config.watchIgnoreDeletes) watchOptions.ignoreDeletes = true;
-      if (config.watchIncludeHistory) watchOptions.includeHistory = true;
-
-      watcher = await os.watch(watchOptions);
-      if (closing) {
-        await watcher.stop();
-        watcher = null;
-        return;
-      }
-      const activeWatcher = watcher;
-      isWatching = true;
-
-      node.status({ fill: 'green', shape: 'dot', text: 'watching' });
-      if (isDebug)
-        node.log(`[OBJECT GET] Started watching bucket: ${node.bucket}`);
-
-      const consumeWatch = async () => {
+      pendingWatchStart = (async () => {
         try {
-          for await (const info of activeWatcher) {
-            if (!isWatching) break;
+          const os = await getObjectStore();
 
-            const watchMsg = {
-              operation: 'WATCH',
-              objectName: info.name,
-              bucket: node.bucket,
-              info: { ...info, headers: headersToObject(info.headers) },
-              size: info.size,
-              metadata: headersToObject(info.headers),
-              isUpdate: info.isUpdate,
-              deleted: info.deleted,
-              _watchEvent: true,
-            };
+          const watchOptions = {};
+          if (config.watchIgnoreDeletes) watchOptions.ignoreDeletes = true;
+          if (config.watchIncludeHistory) watchOptions.includeHistory = true;
 
-            node.send(watchMsg);
+          watcher = await os.watch(watchOptions);
+          if (closing) {
+            await watcher.stop();
+            watcher = null;
+            return;
+          }
+          const activeWatcher = watcher;
+          isWatching = true;
 
-            node.status({
-              fill: 'blue',
-              shape: 'dot',
-              text: `${info.deleted ? 'DEL' : 'PUT'}: ${info.name}`,
-            });
+          node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+          if (isDebug)
+            node.log(`[OBJECT GET] Started watching bucket: ${node.bucket}`);
 
-            if (statusTimer) clearTimeout(statusTimer);
-            statusTimer = setTimeout(() => {
-              statusTimer = null;
-              if (isWatching) {
-                node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+          const consumeWatch = async () => {
+            try {
+              for await (const info of activeWatcher) {
+                if (!isWatching) break;
+
+                const watchMsg = {
+                  operation: 'WATCH',
+                  objectName: info.name,
+                  bucket: node.bucket,
+                  info: { ...info, headers: headersToObject(info.headers) },
+                  size: info.size,
+                  metadata: headersToObject(info.headers),
+                  isUpdate: info.isUpdate,
+                  deleted: info.deleted,
+                  _watchEvent: true,
+                };
+
+                node.send(watchMsg);
+
+                node.status({
+                  fill: 'blue',
+                  shape: 'dot',
+                  text: `${info.deleted ? 'DEL' : 'PUT'}: ${info.name}`,
+                });
+
+                if (statusTimer) clearTimeout(statusTimer);
+                statusTimer = setTimeout(() => {
+                  statusTimer = null;
+                  if (isWatching) {
+                    node.status({
+                      fill: 'green',
+                      shape: 'dot',
+                      text: 'watching',
+                    });
+                  }
+                }, 1000);
               }
-            }, 1000);
-          }
-        } catch (err) {
-          if (isWatching) {
-            node.error(`Watch error: ${err.message}`);
-            node.status({ fill: 'red', shape: 'ring', text: 'watch error' });
-          }
+            } catch (err) {
+              isWatching = false;
+              watcher = null;
+              watchTask = null;
+              if (statusTimer) {
+                clearTimeout(statusTimer);
+                statusTimer = null;
+              }
+              if (!closing) {
+                node.error(`Watch error: ${err.message}`);
+                node.status({
+                  fill: 'red',
+                  shape: 'ring',
+                  text: 'watch error',
+                });
+              }
+            }
+          };
+          watchTask = consumeWatch();
+        } finally {
+          pendingWatchStart = null;
         }
-      };
-      watchTask = consumeWatch();
+      })();
+
+      return pendingWatchStart;
     };
 
     // Helper: Stop watching
@@ -305,6 +326,7 @@ module.exports = function (RED) {
       let closeError;
       try {
         closing = true;
+        detachStatus();
         if (statusTimer) clearTimeout(statusTimer);
         if (watchSetupTask) await watchSetupTask;
         await stopWatch();

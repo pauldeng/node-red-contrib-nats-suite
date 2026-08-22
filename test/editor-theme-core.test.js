@@ -38,14 +38,18 @@ for (const file of FILES) {
 
   test(`${name}: no inline style hardcodes a hex background/color`, () => {
     const styleAttrs = html.match(/style="[^"]*"/g) || [];
-    const offenders = styleAttrs.filter(attr => /#[0-9a-fA-F]{3,8}\b/.test(attr));
+    const offenders = styleAttrs.filter(attr =>
+      /#[0-9a-fA-F]{3,8}\b/.test(attr)
+    );
     assert.deepEqual(offenders, []);
   });
 
   test(`${name}: no duplicate DOM id`, () => {
     const ids = [...html.matchAll(/\bid=["']([^"']+)["']/g)].map(m => m[1]);
     const seen = new Set();
-    const duplicates = ids.filter(id => (seen.has(id) ? true : (seen.add(id), false)));
+    const duplicates = ids.filter(id =>
+      seen.has(id) ? true : (seen.add(id), false)
+    );
     assert.deepEqual(duplicates, []);
   });
 

@@ -20,6 +20,8 @@ module.exports = function (RED) {
     this.serverConfig = resolveServer(RED, node, config);
     if (!this.serverConfig) return;
 
+    const isDebug = !!(config.debug || this.serverConfig.debug);
+
     // Validate stream configuration
     if (!config.streamName) {
       node.error('Stream name is required');
@@ -32,9 +34,11 @@ module.exports = function (RED) {
     let streamReady = false;
     let ensureStreamPromise = null;
     let statusRevertTimer = null;
+    let closing = false;
 
     // Helper: Update node status based on connection state
     const updateConnectionStatus = () => {
+      if (closing) return;
       const currentStatus = node.serverConfig.connectionStatus;
       if (currentStatus === 'connected') {
         node.status({ fill: 'green', shape: 'dot', text: 'connected' });
@@ -49,21 +53,32 @@ module.exports = function (RED) {
     // to the connection status after 2 seconds. Tracked so close() can cancel
     // a pending revert.
     const scheduleStatusRevert = () => {
+      if (closing) return;
       if (statusRevertTimer) clearTimeout(statusRevertTimer);
       statusRevertTimer = setTimeout(() => {
         statusRevertTimer = null;
+        if (closing) return;
         updateConnectionStatus();
       }, 2000);
+    };
+
+    const setStatus = status => {
+      if (!closing) node.status(status);
     };
 
     // Helper: Acquire the JetStream client + manager once and cache them. The
     // connection object is stable across native reconnects, so there is no
     // need to re-derive these on every reconnect.
     const ensureJetStream = async () => {
+      if (closing) throw new Error('Node is closing');
       if (jsClient && jsm) return;
       const nc = await node.serverConfig.getConnection();
-      jsClient = jetstream(nc);
-      jsm = await jetstreamManager(nc);
+      if (closing) throw new Error('Node is closing');
+      const client = jetstream(nc);
+      const manager = await jetstreamManager(nc);
+      if (closing) throw new Error('Node is closing');
+      jsClient = client;
+      jsm = manager;
     };
 
     // Helper: Convert a plain {key: value} object into a real NATS MsgHdrs
@@ -124,21 +139,29 @@ module.exports = function (RED) {
     // forget init call racing an early input message) share one in-flight
     // call instead of each independently checking-then-creating the stream.
     const ensureStream = () => {
+      if (closing) throw new Error('Node is closing');
       if (!ensureStreamPromise) {
-        ensureStreamPromise = ensureStreamImpl().finally(() => {
-          ensureStreamPromise = null;
-        });
+        ensureStreamPromise = (async () => {
+          try {
+            return await ensureStreamImpl();
+          } finally {
+            if (!closing) ensureStreamPromise = null;
+          }
+        })();
       }
       return ensureStreamPromise;
     };
 
     const ensureStreamImpl = async () => {
+      if (closing) throw new Error('Node is closing');
       try {
         await ensureJetStream();
+        if (closing) throw new Error('Node is closing');
 
         // Try to get existing stream
         try {
           const info = await jsm.streams.info(config.streamName);
+          if (closing) return;
 
           // persist_mode is fixed at stream creation and can never be
           // changed via update in either direction - confirmed against a
@@ -176,9 +199,12 @@ module.exports = function (RED) {
               allow_direct: info.config.allow_direct || !!config.allowDirect,
               allow_atomic: info.config.allow_atomic || !!config.allowAtomic,
             });
+            if (closing) return;
           }
           streamReady = true;
-          node.log(`[STREAM PUB] Stream exists: ${config.streamName}`);
+          if (isDebug) {
+            node.log(`[STREAM PUB] Stream exists: ${config.streamName}`);
+          }
           return true;
         } catch (err) {
           // Stream doesn't exist, create it
@@ -186,7 +212,10 @@ module.exports = function (RED) {
             err instanceof JetStreamApiError &&
             err.code === JetStreamApiCodes.StreamNotFound
           ) {
-            node.log(`[STREAM PUB] Creating stream: ${config.streamName}`);
+            if (closing) return;
+            if (isDebug) {
+              node.log(`[STREAM PUB] Creating stream: ${config.streamName}`);
+            }
 
             const streamConfig = {
               name: config.streamName,
@@ -211,16 +240,20 @@ module.exports = function (RED) {
               allow_msg_schedules: !!config.allowMsgSchedules,
               allow_direct: !!config.allowDirect,
               allow_atomic: !!config.allowAtomic,
-              persist_mode: config.persistMode === 'async' ? 'async' : 'default',
+              persist_mode:
+                config.persistMode === 'async' ? 'async' : 'default',
             };
 
             await jsm.streams.add(streamConfig);
+            if (closing) return;
             streamReady = true;
 
-            node.log(`[STREAM PUB] Stream created: ${config.streamName}`);
+            if (isDebug) {
+              node.log(`[STREAM PUB] Stream created: ${config.streamName}`);
+            }
 
             // Show creation status for 2 seconds
-            node.status({
+            setStatus({
               fill: 'green',
               shape: 'dot',
               text: `stream ${config.streamName} created`,
@@ -234,10 +267,11 @@ module.exports = function (RED) {
           throw err;
         }
       } catch (err) {
+        if (closing) throw err;
         streamReady = false;
 
         // Show error status for 2 seconds
-        node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        setStatus({ fill: 'red', shape: 'ring', text: 'error' });
 
         // Revert to connection status after 2 seconds
         scheduleStatusRevert();
@@ -256,7 +290,7 @@ module.exports = function (RED) {
         try {
           await ensureStream();
         } catch (err) {
-          node.error(`Failed to ensure stream: ${err.message}`);
+          if (!closing) node.error(`Failed to ensure stream: ${err.message}`);
         }
       };
       initializeStream();
@@ -295,9 +329,11 @@ module.exports = function (RED) {
             ) {
               // Use msg.payload as full stream config (NATS native format)
               streamConfig = { ...msg.payload };
-              node.log(
-                `[STREAM PUB] Creating stream from payload config: ${streamConfig.name}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM PUB] Creating stream from payload config: ${streamConfig.name}`
+                );
+              }
             } else {
               // Build config from individual msg/node properties (legacy support)
               const targetStreamName = msg.stream || streamName;
@@ -396,9 +432,11 @@ module.exports = function (RED) {
                     ? msg.sealed
                     : config.sealed || false,
               };
-              node.log(
-                `[STREAM PUB] Creating stream from properties: ${streamConfig.name}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM PUB] Creating stream from properties: ${streamConfig.name}`
+                );
+              }
             }
 
             // Create the stream
@@ -413,12 +451,14 @@ module.exports = function (RED) {
               state: createdStream.state,
               created: createdStream.created,
             };
-            node.log(
-              `[STREAM PUB] Stream created successfully: ${createdStream.config.name}`
-            );
+            if (isDebug) {
+              node.log(
+                `[STREAM PUB] Stream created successfully: ${createdStream.config.name}`
+              );
+            }
 
             // Show creation status for 2 seconds
-            node.status({
+            setStatus({
               fill: 'green',
               shape: 'dot',
               text: `stream ${createdStream.config.name} created`,
@@ -464,9 +504,11 @@ module.exports = function (RED) {
               // update (see ensureStreamImpl above), so a msg.payload that
               // tries to change it will surface that real rejection here
               // rather than silently failing.
-              node.log(
-                `[STREAM PUB] Updating stream from payload config: ${streamConfig.name}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM PUB] Updating stream from payload config: ${streamConfig.name}`
+                );
+              }
             } else {
               // Build config from individual msg/node properties (legacy support)
               streamConfig = {
@@ -597,9 +639,11 @@ module.exports = function (RED) {
                   config.persistMode ||
                   currentStream.config.persist_mode,
               };
-              node.log(
-                `[STREAM PUB] Updating stream from properties: ${streamConfig.name}`
-              );
+              if (isDebug) {
+                node.log(
+                  `[STREAM PUB] Updating stream from properties: ${streamConfig.name}`
+                );
+              }
             }
 
             // Update the stream
@@ -616,12 +660,14 @@ module.exports = function (RED) {
               config: updatedStream.config,
               state: updatedStream.state,
             };
-            node.log(
-              `[STREAM PUB] Stream updated successfully: ${updatedStream.config.name}`
-            );
+            if (isDebug) {
+              node.log(
+                `[STREAM PUB] Stream updated successfully: ${updatedStream.config.name}`
+              );
+            }
 
             // Show update status for 2 seconds
-            node.status({
+            setStatus({
               fill: 'green',
               shape: 'dot',
               text: `stream ${updatedStream.config.name} updated`,
@@ -650,9 +696,11 @@ module.exports = function (RED) {
               subjects: updatedConfig.subjects,
               success: true,
             };
-            node.log(
-              `[STREAM PUB] Updated subjects for ${streamName}: ${updatedConfig.subjects.join(', ')}`
-            );
+            if (isDebug) {
+              node.log(
+                `[STREAM PUB] Updated subjects for ${streamName}: ${updatedConfig.subjects.join(', ')}`
+              );
+            }
             break;
           }
 
@@ -683,7 +731,7 @@ module.exports = function (RED) {
             };
 
             // Show delete status for 2 seconds
-            node.status({
+            setStatus({
               fill: 'green',
               shape: 'dot',
               text: `stream ${streamName} deleted`,
@@ -828,9 +876,11 @@ module.exports = function (RED) {
 
             msg.operation = 'batch-publish';
             msg.payload = batchAck;
-            node.log(
-              `[STREAM PUB] Batch committed: ${batchAck.batch} (${batchAck.count} messages)`
-            );
+            if (isDebug) {
+              node.log(
+                `[STREAM PUB] Batch committed: ${batchAck.batch} (${batchAck.count} messages)`
+              );
+            }
             break;
           }
 
@@ -854,13 +904,14 @@ module.exports = function (RED) {
             return new Error(`Unknown operation: ${operation}`);
         }
 
-        send(msg);
+        if (!closing) send(msg);
         return null;
       } catch (err) {
+        if (closing) return null;
         msg.error = err.message;
 
         // Show error status for 2 seconds
-        node.status({ fill: 'red', shape: 'ring', text: 'error' });
+        setStatus({ fill: 'red', shape: 'ring', text: 'error' });
 
         // Revert to connection status after 2 seconds
         scheduleStatusRevert();
@@ -884,6 +935,10 @@ module.exports = function (RED) {
         // Ensure we have a JetStream client
         if (!streamReady) {
           await ensureStream();
+        }
+        if (closing) {
+          done();
+          return;
         }
 
         // Determine subject
@@ -934,7 +989,10 @@ module.exports = function (RED) {
             msg.expectLastSequence ?? config.expectLastSequence;
           const expect = {};
           if (expectLastMsgID) expect.lastMsgID = expectLastMsgID;
-          if (expectLastSequenceSource !== undefined && expectLastSequenceSource !== '') {
+          if (
+            expectLastSequenceSource !== undefined &&
+            expectLastSequenceSource !== ''
+          ) {
             const parsedSequence = parseInt(expectLastSequenceSource, 10);
             if (!Number.isNaN(parsedSequence)) {
               expect.lastSequence = parsedSequence;
@@ -954,7 +1012,8 @@ module.exports = function (RED) {
         // so it merges with whatever headers already won above (msg.headers
         // or a native msg.options.headers passthrough) instead of clobbering
         // them.
-        const traceDestination = node.serverConfig.getTraceOptions()?.traceDestination;
+        const traceDestination =
+          node.serverConfig.getTraceOptions()?.traceDestination;
         if (traceDestination) {
           if (!publishOptions.headers) publishOptions.headers = natsHeaders();
           publishOptions.headers.set('Nats-Trace-Dest', traceDestination);
@@ -963,6 +1022,10 @@ module.exports = function (RED) {
           publishOptions.cancelSchedule = msg.cancelSchedule;
 
         const pubAck = await jsClient.publish(subject, payload, publishOptions);
+        if (closing) {
+          done();
+          return;
+        }
 
         // Update message with publish info
         msg.stream = pubAck.stream;
@@ -975,6 +1038,10 @@ module.exports = function (RED) {
         send(msg);
         done();
       } catch (err) {
+        if (closing) {
+          done();
+          return;
+        }
         msg.published = false;
         msg.error = err.message;
 
@@ -985,7 +1052,8 @@ module.exports = function (RED) {
     });
 
     // Cleanup on close
-    node.on('close', function (done) {
+    node.on('close', async function (done) {
+      closing = true;
       if (statusRevertTimer) {
         clearTimeout(statusRevertTimer);
         statusRevertTimer = null;
@@ -994,6 +1062,7 @@ module.exports = function (RED) {
       this.serverConfig.unregisterConnectionUser(node.id);
       jsClient = null;
       jsm = null;
+      ensureStreamPromise = null;
       streamReady = false;
       node.status({});
       done();

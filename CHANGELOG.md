@@ -1,5 +1,11 @@
 ## Changelog
 
+### 1.0.0 – First public release as `@pauldeng/node-red-contrib-nats-suite`
+
+First npm publication of this fork. Modular `@nats-io/*` 3.4.0 client; Node-RED `>= 5.0` and Node.js `>= 22.9`. Maintained by Paul Deng at [github.com/pauldeng/node-red-contrib-nats-suite](https://github.com/pauldeng/node-red-contrib-nats-suite). Originally created by blanpa. Later releases publish from GitHub Actions via npm trusted publishing (OIDC + provenance).
+
+---
+
 ### 0.2.2 – NKey-Only Authentication Fix
 
 > Note: version `0.2.1` was published to npm directly without a corresponding commit on `main`. This release continues from `0.2.0` on `main` and skips `0.2.1` to avoid version drift.
@@ -7,6 +13,7 @@
 #### Bug Fixes
 
 **NATS Server (`nats-suite-server`)**
+
 - Fixed broken NKey-only authentication (#14, fixes #15):
   - Resolved duplicate HTML element ID `node-config-input-nkeySeed` shared between the JWT and NKey-only sections, which caused the seed value entered in the NKey-only form to never be persisted by Node-RED.
   - The two NKey seed fields are now kept in sync via jQuery so the value entered in either section ends up in the credential store.
@@ -14,6 +21,7 @@
   - Added a clear error message when `authMethod` is `nkey` but no NKey seed is configured.
 
 #### Credits
+
 - Thanks to @cfedersp for reporting (#15) and contributing the fix (#14).
 
 ---
@@ -23,15 +31,18 @@
 #### New Features
 
 **Stream Consumer (`nats-suite-stream-consumer`)**
+
 - **Create on Init option**: New `createOnInit` setting to control whether a consumer is automatically created on node initialization
 - **Output data format**: Configurable output format and debug logging for consumed messages
 - **Flow control UI**: Improved UI with idle status indicator for better visibility of consumer state
 - **Consumer config visibility**: Refactored UI to show/hide consumer configuration options based on context
 
 **Stream Publisher (`nats-suite-stream-publisher`)**
+
 - **Create on Init option**: New `createOnInit` setting to control whether a stream is automatically created on node initialization
 
 **NATS Feature Coverage Documentation**
+
 - Added comprehensive NATS Feature Coverage section to README
 - Detailed feature matrix for all NATS areas:
   - Core NATS (17 features documented)
@@ -45,11 +56,13 @@
 - Roadmap for planned features
 
 #### Improvements
+
 - `nats-memory-server` moved from `dependencies` to `optionalDependencies` – no longer required for installation
 - Added contributors to `package.json`
 - Added npm downloads and Node.js version badges to README
 
 #### Documentation
+
 - All documentation files are now in English
 - Added legend explaining status symbols
 - Added feature-to-node mapping for easy reference
@@ -57,6 +70,7 @@
 - Updated test cases in `TEST-CASES.md`
 
 #### CI/CD
+
 - Added workflow to create GitHub issues from TODO comments
 - Simplified todo-workflow by removing unused steps and permissions
 - Refactored `.npmignore` and updated `package.json` for development environment
@@ -66,11 +80,13 @@
 ### 0.0.3 – Stability & Bug Fixes
 
 #### Improvements
+
 - Improved connection handling stability
 - Better error messages for common issues
 - Enhanced debug logging across all nodes
 
 #### Bug Fixes
+
 - Fixed edge cases in KV Store watch operation
 - Improved Stream Consumer message acknowledgment handling
 - Fixed status display inconsistencies
@@ -82,6 +98,7 @@
 #### New Features
 
 **Server Manager (`nats-suite-server-manager`)**
+
 - **External Config File Support**: Use a mounted `.conf` file instead of generating config from UI settings
 - **WebSocket Support**: Enable WebSocket connections for browser-based clients (configurable port)
 - **TLS/SSL Encryption**: Full TLS support with certificate, key, and CA file configuration
@@ -92,19 +109,23 @@
 - **Simplified Command API**: Use `msg.command` instead of `msg.payload.command`
 
 **Pre-built Binaries**
+
 - Included NATS server binaries v2.12.2 for Linux (AMD64 and ARM64)
 - Custom binary path support for mounting your own nats-server
 
 **Example Configs**
+
 - Added `config/nats-embedded.conf` as example configuration for the server manager
 
 #### Improvements
+
 - Config sections hide automatically when using external config file
 - Better port detection from external config files
 - Connection verification before marking server as "running"
 - Removed "NEW" badges from stabilized features
 
 #### Bug Fixes
+
 - Fixed `credentials: null` in Leaf Node configuration
 - Fixed `node.serverType` undefined in stop payload
 - Fixed repeated status updates during stdout processing

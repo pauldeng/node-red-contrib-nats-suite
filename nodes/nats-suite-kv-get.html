@@ -61,7 +61,9 @@
 
       // Include history handler
       $('#node-input-includeHistory').on('change', function () {
-        $('#history-limit-row, #history-limit-tip').toggle($(this).is(':checked'));
+        $('#history-limit-row, #history-limit-tip').toggle(
+          $(this).is(':checked')
+        );
       });
 
       // Trigger initial state
@@ -211,28 +213,28 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-kv-get">
-Get values from a NATS JetStream Key-Value bucket, or watch for changes.
+  Get values from a NATS JetStream Key-Value bucket, or watch for changes.
 
-### Modes
+  ### Modes
 
- - `get` - retrieve a single value
- - `watch` - subscribe to key changes
- - `keys` - list all keys in the bucket
+  - `get` - retrieve a single value
+  - `watch` - subscribe to key changes
+  - `keys` - list all keys in the bucket
 
-The mode can be overridden dynamically by setting `msg.operation` to `get`, `watch`, `keys` or `list`.
+  The mode can be overridden dynamically by setting `msg.operation` to `get`, `watch`, `keys` or `list`.
 
-### Watch options
+  ### Watch options
 
- - **Watch Pattern** - comma-separate multiple keys/patterns for a multi-key watch (server 2.10+).
- - **Headers Only** - server sends only metadata, not the value bytes. `msg.payload` is `null` on these events; `msg.length` still reports the real value size.
- - **Include** - `history` delivers all existing revisions before switching to live updates; `updates` skips the initial values entirely and only delivers changes from now on.
- - **Resume From Revision** - restart a watcher from a remembered revision instead of the beginning.
+  - **Watch Pattern** - comma-separate multiple keys/patterns for a multi-key watch (server 2.10+).
+  - **Headers Only** - server sends only metadata, not the value bytes. `msg.payload` is `null` on these events; `msg.length` still reports the real value size.
+  - **Include** - `history` delivers all existing revisions before switching to live updates; `updates` skips the initial values entirely and only delivers changes from now on.
+  - **Resume From Revision** - restart a watcher from a remembered revision instead of the beginning.
 
-### Outputs
+  ### Outputs
 
-: payload (any) : the value from the KV store, or an array of keys (`null` for a Headers Only watch event)
-: key (string) : the key name
-: revision (number) : the revision number
-: length (number) : the real value size in bytes, even when payload is `null` due to Headers Only
-: operation (string) : `"GET"`, `"PUT"`, `"DEL"`, or `"LIST"`
+  : payload (any) : the value from the KV store, or an array of keys (`null` for a Headers Only watch event)
+  : key (string) : the key name
+  : revision (number) : the revision number
+  : length (number) : the real value size in bytes, even when payload is `null` due to Headers Only
+  : operation (string) : `"GET"`, `"PUT"`, `"DEL"`, or `"LIST"`
 </script>

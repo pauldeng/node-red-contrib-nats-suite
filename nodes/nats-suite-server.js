@@ -133,6 +133,11 @@ module.exports = function (RED) {
 
     const servers = this.server.split(',');
 
+    this.connectTimeout = parseInt(n.timeout, 10);
+    if (!Number.isFinite(this.connectTimeout) || this.connectTimeout < 1000) {
+      this.connectTimeout = 10000;
+    }
+
     // Build Connection Options
     const ConnectionOptions = {
       servers: servers,
@@ -143,7 +148,7 @@ module.exports = function (RED) {
       waitOnFirstConnect: false, // Fail fast on the *first* connect attempt so getConnection() can
       // retry on demand instead of blocking; native reconnect above only
       // governs recovery after that first connection succeeds.
-      timeout: n.timeout || 10000, // 10 second timeout
+      timeout: this.connectTimeout,
       pingInterval: n.pingInterval || 30000, // 30 second ping interval
       maxPingOut: n.maxPingOut || 3, // Max ping outs before disconnect
     };
@@ -365,7 +370,6 @@ module.exports = function (RED) {
           this.connectionStats.reconnectAttempts++;
           this.emitStatusChange();
 
-          // Start connection timeout warning
           const connectionStartTime = Date.now();
           const connectionTimeout = setTimeout(() => {
             const elapsed = Math.floor(
@@ -378,7 +382,7 @@ module.exports = function (RED) {
             this.warn(
               `NATS connection attempt taking longer than expected (${elapsed}s). Check server availability.`
             );
-          }, 10000);
+          }, this.connectTimeout);
 
           // Log connection attempt with auth method and TLS info
           let authInfo = 'no authentication';
@@ -414,7 +418,7 @@ module.exports = function (RED) {
             this.log(`  - Servers: ${servers.join(', ')}`);
             this.log(`  - Auth: ${authInfo}`);
             this.log(`  - Security: ${tlsInfo}`);
-            this.log(`  - Timeout: ${n.timeout || 10000}ms`);
+            this.log(`  - Timeout: ${this.connectTimeout}ms`);
           }
 
           try {
@@ -426,9 +430,14 @@ module.exports = function (RED) {
             const cancelled = new Promise((_, reject) => {
               cancelDial = () => reject(closeError());
             });
-            dial.then(connection => {
-              if (closing) connection.close().catch(() => {});
-            }, () => {});
+            void (async () => {
+              try {
+                const connection = await dial;
+                if (closing) await connection.close();
+              } catch {
+                // Failure is handled by Promise.race([dial, cancelled]) below.
+              }
+            })();
             const connection = await Promise.race([dial, cancelled]);
             if (closing) {
               await connection.close();
@@ -491,11 +500,16 @@ module.exports = function (RED) {
     // The initial attempt below MUST go through here too, or it races the first
     // getConnection() and leaks one connection per config node on every startup.
     let pendingConnect = null;
+    let deferredCloseTimer = null;
+    let deferredClosePromise = null;
     const connectOnce = () => {
       if (this.connection) return Promise.resolve(this.connection);
       if (!pendingConnect) {
         pendingConnect = (async () => {
           try {
+            if (deferredClosePromise) await deferredClosePromise;
+            if (this.connection) return this.connection;
+            if (closing) throw closeError();
             return await connectNats();
           } finally {
             pendingConnect = null;
@@ -508,6 +522,7 @@ module.exports = function (RED) {
     this.getConnection = async () => {
       if (this.connection) return this.connection;
       await connectOnce();
+      if (!this.connection) throw closeError();
       return this.connection;
     };
 
@@ -543,8 +558,6 @@ module.exports = function (RED) {
     };
 
     // Connection Pool: Unregister a node as user of this connection
-    let deferredCloseTimer = null;
-    let deferredClosePromise = null;
     const scheduleDeferredClose = () => {
       if (
         closing ||
@@ -557,7 +570,7 @@ module.exports = function (RED) {
 
       if (isDebug)
         this.log(
-          `[NATS] No more connection users - scheduling connection cleanup in 30s`
+          `[NATS] No more connection users - scheduling connection cleanup in 250ms`
         );
       deferredCloseTimer = setTimeout(() => {
         deferredCloseTimer = null;
@@ -591,7 +604,7 @@ module.exports = function (RED) {
           }
         })();
         deferredClosePromise = closePromise;
-      }, 30000);
+      }, 250);
     };
     this.unregisterConnectionUser = nodeId => {
       if (!nodeId) {
@@ -658,7 +671,8 @@ module.exports = function (RED) {
     };
 
     this.setServers = servers => {
-      if (!this.connection) throw new Error('Cannot set servers: not connected');
+      if (!this.connection)
+        throw new Error('Cannot set servers: not connected');
       this.connection.setServers(servers);
     };
 
@@ -668,13 +682,19 @@ module.exports = function (RED) {
     };
 
     const closeConnection = async connection => {
-      const bounded = (promise, timeout = 1000) => new Promise(resolve => {
-        const timer = setTimeout(resolve, timeout);
-        Promise.resolve(promise).catch(() => {}).then(() => {
+      const bounded = async (promise, timeout = 1000) => {
+        let timer;
+        try {
+          await Promise.race([
+            Promise.resolve(promise).catch(() => {}),
+            new Promise(resolve => {
+              timer = setTimeout(resolve, timeout);
+            }),
+          ]);
+        } finally {
           clearTimeout(timer);
-          resolve();
-        });
-      });
+        }
+      };
       if (!connection || connection.isClosed()) return;
       await bounded(connection.drain());
       if (!connection.isClosed()) await bounded(connection.close());

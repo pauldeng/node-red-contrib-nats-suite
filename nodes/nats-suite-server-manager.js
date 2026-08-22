@@ -29,7 +29,7 @@ module.exports = function (RED) {
     this.autoStart = config.autoStart !== false;
     this.debug = config.debug || false;
 
-    // Binary source: 'auto' (nats-memory-server), 'custom' (custom path), 'system' (system PATH)
+    // Binary source: 'auto' (local/cache locations then system PATH), 'custom' (custom path), 'system' (system PATH)
     this.binarySource = config.binarySource || 'auto';
     this.customBinaryPath = config.customBinaryPath || '';
 
@@ -103,7 +103,8 @@ module.exports = function (RED) {
     };
 
     const terminateProcess = async child => {
-      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+      if (!child || child.exitCode !== null || child.signalCode !== null)
+        return;
 
       const exited = once(child, 'exit', {
         signal: AbortSignal.timeout(5000),
@@ -270,7 +271,7 @@ module.exports = function (RED) {
 
           case 'auto':
           default: {
-            // Auto-detect: try nats-memory-server first, then system PATH
+            // Auto-detect: try available local/cache locations first, then system PATH
             const possibleBinPaths = [
               path.join(
                 __dirname,
@@ -300,7 +301,7 @@ module.exports = function (RED) {
 
             if (!natsServerBin) {
               const installHint =
-                'Install nats-memory-server (npm install nats-memory-server) or select "Custom Binary" and mount your own.';
+                'Install nats-server on the host or select "Custom Binary" and mount your own.';
               setStatus('error', 'nats-server not found');
               throw new Error(`nats-server binary not found. ${installHint}`);
             }
@@ -637,10 +638,21 @@ module.exports = function (RED) {
           });
 
           let started = false;
+          let startSettled = false;
           let startupOutput = '';
           let lastStatusPhase = '';
           let startupTimeout = null;
           let startupFailure = null;
+          const resolveStart = () => {
+            if (startSettled) return;
+            startSettled = true;
+            resolve();
+          };
+          const rejectStart = err => {
+            if (startSettled) return;
+            startSettled = true;
+            reject(err);
+          };
 
           const checkStarted = data => {
             startupOutput += data.toString();
@@ -746,7 +758,7 @@ module.exports = function (RED) {
                 topic: 'server.started',
                 payload: startedPayload,
               });
-              resolve();
+              resolveStart();
             }
           };
 
@@ -771,7 +783,7 @@ module.exports = function (RED) {
             setStatus('error', err.message.substring(0, 20));
             removeConfigFile();
             natsServerProcess = null;
-            reject(err);
+            rejectStart(err);
           });
 
           natsServerProcess.on('exit', (code, signal) => {
@@ -779,7 +791,7 @@ module.exports = function (RED) {
             if (!started) {
               setStatus('error', `exit: ${code || signal}`);
               removeConfigFile();
-              reject(
+              rejectStart(
                 startupFailure || new Error(`Server exited with code ${code}`)
               );
             } else {
@@ -801,13 +813,13 @@ module.exports = function (RED) {
               startupFailure = new Error('Server start timeout');
               if (!natsServerProcess) {
                 removeConfigFile();
-                reject(startupFailure);
+                rejectStart(startupFailure);
                 return;
               }
               try {
                 await terminateProcess(natsServerProcess);
               } catch (err) {
-                reject(err);
+                rejectStart(err);
               }
             }
           }, 10000);

@@ -25,13 +25,15 @@ try {
 // nodered container is a different address (its own docker network hostname)
 // - see NATS_CONTAINER_URL.
 const NODE_RED_PORT = process.env.NODERED_PORT || 1885;
-const NODE_RED_URL = process.env.NODE_RED_URL || `http://localhost:${NODE_RED_PORT}`;
+const NODE_RED_URL =
+  process.env.NODE_RED_URL || `http://localhost:${NODE_RED_PORT}`;
 // Default derives from NATS_CLIENT_PORT so the host-side port override used by
 // docker-compose cannot drift from the port tests dial. If they drift, tests
 // silently talk to a different broker than Node-RED does and time out obscurely.
 const NATS_URL =
   process.env.NATS_URL || `localhost:${process.env.NATS_CLIENT_PORT || 4222}`;
-const NATS_CONTAINER_URL = process.env.NATS_CONTAINER_URL || 'nats://nats-server:4222';
+const NATS_CONTAINER_URL =
+  process.env.NATS_CONTAINER_URL || 'nats://nats-server:4222';
 const HARNESS_LABEL = 'test-harness';
 
 // --- Docker / compose lifecycle ----------------------------------------
@@ -59,9 +61,11 @@ async function waitForAdminApi(timeoutMs = 30000) {
     }
     // ponytail: Node-RED's HTTP server exposes no "ready" event to an
     // external process, so polling is the only available signal here.
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 500));
   }
-  throw new Error(`Node-RED admin API not reachable at ${NODE_RED_URL}: ${lastErr && lastErr.message}`);
+  throw new Error(
+    `Node-RED admin API not reachable at ${NODE_RED_URL}: ${lastErr && lastErr.message}`
+  );
 }
 
 // Brings up the services already defined in docker-compose.yml and waits for
@@ -74,6 +78,11 @@ async function ensureStackUp() {
       cwd: REPO_ROOT,
       stdio: 'ignore',
     });
+    execFileSync('docker', [
+      'cp',
+      'nats-server-dev:/nats-server',
+      path.join(REPO_ROOT, 'bin', 'nats-server'),
+    ]);
   } catch (err) {
     throw new Error(`docker compose up failed: ${err.message}`, { cause: err });
   }
@@ -96,7 +105,10 @@ async function deployFlow(nodes) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 'harness', label: HARNESS_LABEL, nodes }),
   });
-  if (!res.ok) throw new Error(`deployFlow failed: HTTP ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(
+      `deployFlow failed: HTTP ${res.status} ${await res.text()}`
+    );
   return (await res.json()).id;
 }
 
@@ -107,20 +119,27 @@ async function sweepHarnessFlows() {
   const res = await fetch(`${NODE_RED_URL}/flows`);
   if (!res.ok) return 0;
   const flows = await res.json();
-  const stale = flows.filter((n) => n.type === 'tab' && n.label === HARNESS_LABEL);
+  const stale = flows.filter(
+    n => n.type === 'tab' && n.label === HARNESS_LABEL
+  );
   for (const tab of stale) await deleteFlow(tab.id).catch(() => {});
   return stale.length;
 }
 
 async function deleteFlow(flowId) {
-  const res = await fetch(`${NODE_RED_URL}/flow/${flowId}`, { method: 'DELETE' });
-  if (!res.ok && res.status !== 404) throw new Error(`deleteFlow failed: HTTP ${res.status}`);
+  const res = await fetch(`${NODE_RED_URL}/flow/${flowId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok && res.status !== 404)
+    throw new Error(`deleteFlow failed: HTTP ${res.status}`);
 }
 
 // Fires a deployed inject node on demand via the admin API, independent of
 // its own repeat/once configuration.
 async function triggerInject(nodeId) {
-  const res = await fetch(`${NODE_RED_URL}/inject/${nodeId}`, { method: 'POST' });
+  const res = await fetch(`${NODE_RED_URL}/inject/${nodeId}`, {
+    method: 'POST',
+  });
   if (!res.ok) throw new Error(`triggerInject failed: HTTP ${res.status}`);
 }
 
@@ -141,10 +160,11 @@ function connectComms() {
       ws.send(JSON.stringify({ subscribe: 'status/#' }));
       resolve();
     };
-    ws.onerror = () => reject(new Error(`comms websocket error connecting to ${NODE_RED_URL}`));
+    ws.onerror = () =>
+      reject(new Error(`comms websocket error connecting to ${NODE_RED_URL}`));
   });
 
-  ws.onmessage = (ev) => {
+  ws.onmessage = ev => {
     for (const { topic, data } of JSON.parse(ev.data)) {
       const list = waiters.get(topic);
       if (!list) continue;
@@ -172,7 +192,11 @@ function connectComms() {
         timer: setTimeout(() => {
           const idx = list.indexOf(entry);
           if (idx >= 0) list.splice(idx, 1);
-          reject(new Error(`Timed out after ${timeoutMs}ms waiting for comms topic "${topic}"`));
+          reject(
+            new Error(
+              `Timed out after ${timeoutMs}ms waiting for comms topic "${topic}"`
+            )
+          );
         }, timeoutMs),
       };
       list.push(entry);
@@ -181,9 +205,10 @@ function connectComms() {
 
   return {
     ready,
-    waitForStatus: (nodeId, predicate, timeoutMs) => waitFor(`status/${nodeId}`, predicate, timeoutMs),
+    waitForStatus: (nodeId, predicate, timeoutMs) =>
+      waitFor(`status/${nodeId}`, predicate, timeoutMs),
     waitForDebug: async (nodeId, timeoutMs) => {
-      const d = await waitFor('debug', (d) => d.id === nodeId, timeoutMs);
+      const d = await waitFor('debug', d => d.id === nodeId, timeoutMs);
       return JSON.parse(d.msg);
     },
     close: () => ws.close(),
@@ -254,7 +279,12 @@ async function subscribeOnce(nc, subject, timeoutMs = 8000) {
       })(),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for a message on "${subject}"`)),
+          () =>
+            reject(
+              new Error(
+                `Timed out after ${timeoutMs}ms waiting for a message on "${subject}"`
+              )
+            ),
           timeoutMs
         );
       }),
@@ -285,7 +315,12 @@ async function subscribeOnceMsg(nc, subject, timeoutMs = 8000) {
       })(),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for a message on "${subject}"`)),
+          () =>
+            reject(
+              new Error(
+                `Timed out after ${timeoutMs}ms waiting for a message on "${subject}"`
+              )
+            ),
           timeoutMs
         );
       }),

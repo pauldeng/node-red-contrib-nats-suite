@@ -19,9 +19,9 @@
       return this.name || 'nats subscribe';
     },
     paletteLabel: 'nats subscribe',
-    oneditprepare: function() {
+    oneditprepare: function () {
       // Collapsible sections
-      $('.nats-section-header').on('click', function() {
+      $('.nats-section-header').on('click', function () {
         const $header = $(this);
         const $content = $header.next('.nats-section-content');
         const $icon = $header.find('.nats-section-toggle');
@@ -29,9 +29,9 @@
         $icon.toggleClass('fa-chevron-down fa-chevron-right');
         $header.toggleClass('collapsed');
       });
-      
+
       // Subscription mode handler
-      $('#node-input-subscriptionMode').on('change', function() {
+      $('#node-input-subscriptionMode').on('change', function () {
         const mode = $(this).val();
         if (mode === 'static') {
           $('#nats-subject-row').slideDown(200);
@@ -39,20 +39,20 @@
           $('#nats-subject-row').slideUp(200);
         }
       });
-      
+
       // Trigger initial state
       $('#node-input-subscriptionMode').trigger('change');
     },
-    oneditsave: function() {
+    oneditsave: function () {
       const mode = $('#node-input-subscriptionMode').val();
-      
+
       // Set the number of inputs based on the subscription mode
       if (mode === 'static') {
         this.inputs = 0;
       } else {
         this.inputs = 1;
       }
-      
+
       // Validate subject is required in static mode
       if (mode === 'static') {
         const subject = $('#node-input-datapointid').val();
@@ -62,7 +62,7 @@
         }
       }
       return true;
-    }
+    },
   });
 </script>
 
@@ -187,7 +187,7 @@
   </style>
 
   <div class="nats-subscribe-config">
-    
+
     <!-- Basic Configuration -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -202,7 +202,7 @@
           <label><i class="fa fa-tag"></i>Name</label>
           <input type="text" id="node-input-name" placeholder="Optional display name">
         </div>
-        
+
         <div class="nats-form-row">
           <label><i class="fa fa-server"></i>NATS Server</label>
           <input type="text" id="node-input-server">
@@ -213,7 +213,7 @@
         </div>
       </div>
     </div>
-    
+
     <!-- Subscription Configuration -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -234,7 +234,7 @@
             Static: Uses configured subject | Dynamic: Can be changed via input messages
           </div>
         </div>
-        
+
         <div class="nats-form-row" id="nats-subject-row">
           <label><i class="fa fa-envelope"></i>NATS Subject <span class="nats-badge nats-badge-required">required</span></label>
           <input type="text" id="node-input-datapointid" placeholder="e.g. sensor.temperature or events.>">
@@ -242,7 +242,7 @@
             Wildcards: <code>*</code> (single level), <code>&gt;</code> (multi-level)
           </div>
         </div>
-        
+
         <div class="nats-form-row">
           <label><i class="fa fa-users"></i>Queue Group <span class="nats-badge nats-badge-optional">optional</span></label>
           <input type="text" id="node-input-queueGroup" placeholder="e.g. workers">
@@ -252,7 +252,7 @@
         </div>
       </div>
     </div>
-    
+
     <!-- Output Configuration -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -277,47 +277,47 @@
         </div>
       </div>
     </div>
-    
+
   </div>
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-subscribe">
-Subscribes to messages from NATS subjects.
+  Subscribes to messages from NATS subjects.
 
-### Subscription Modes
+  ### Subscription Modes
 
- - **Static:** Uses the configured subject. Input messages are ignored.
- - **Dynamic:** Subject can be changed via `msg.topic` or `msg.subject`
+  - **Static:** Uses the configured subject. Input messages are ignored.
+  - **Dynamic:** Subject can be changed via `msg.topic` or `msg.subject`
 
-### Queue Groups
+  ### Queue Groups
 
-Queue groups enable load balancing across multiple subscribers. When a queue group is specified, only one subscriber in the group receives each message. This is useful for distributing work among multiple instances.
+  Queue groups enable load balancing across multiple subscribers. When a queue group is specified, only one subscriber in the group receives each message. This is useful for distributing work among multiple instances.
 
- - Configure a static queue group in the node settings
- - Or set it dynamically via `msg.queueGroup` in Dynamic mode
- - Leave empty for regular (non-queue) subscription
+  - Configure a static queue group in the node settings
+  - Or set it dynamically via `msg.queueGroup` in Dynamic mode
+  - Leave empty for regular (non-queue) subscription
 
-### Outputs
+  ### Outputs
 
-: payload (any) : The received message data (parsed based on format setting)
-: topic (string) : The topic field value based on configuration
-: _reply (string, optional) : Reply subject for request-reply patterns
-: headers (object, optional) : NATS message headers (if present)
+  : payload (any) : The received message data (parsed based on format setting)
+  : topic (string) : The topic field value based on configuration
+  : _reply (string, optional) : Reply subject for request-reply patterns
+  : headers (object, optional) : NATS message headers (if present)
 
-### Dynamic Subscription
+  ### Dynamic Subscription
 
-```
-// Change subscription via input message:
-msg.topic = "sensor.temperature"
-// or
-msg.subject = "sensor.humidity"
+  ```
+  // Change subscription via input message:
+  msg.topic = "sensor.temperature"
+  // or
+  msg.subject = "sensor.humidity"
 
-// With queue group for load balancing:
-msg.queueGroup = "workers"
-```
+  // With queue group for load balancing:
+  msg.queueGroup = "workers"
+  ```
 
-### Subject Wildcards
+  ### Subject Wildcards
 
- - `*` - matches a single token (e.g., `sensor.*.temperature`)
- - `>` - matches one or more tokens (e.g., `sensor.>`)
+  - `*` - matches a single token (e.g., `sensor.*.temperature`)
+  - `>` - matches one or more tokens (e.g., `sensor.>`)
 </script>

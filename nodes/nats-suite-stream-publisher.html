@@ -376,7 +376,7 @@
         <div class="nats-form-row" id="schedule-at-row">
           <label><i class="fa fa-calendar-check-o"></i>Fire At (ISO date)</label>
           <input type="text" id="node-input-scheduleAt" placeholder="2026-01-01T00:00:00Z">
-          <div class="form-tips">Requires nats-server &ge;2.12.0</div>
+          <div class="form-tips">Requires the supported nats-server floor: &ge;2.14.0</div>
         </div>
         <div class="nats-form-row" id="schedule-cron-row">
           <label><i class="fa fa-repeat"></i>Cron Expression</label>
@@ -602,196 +602,196 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-stream-publisher">
-Publishes messages to NATS JetStream with persistence and acknowledgment, and manages JetStream streams.
+  Publishes messages to NATS JetStream with persistence and acknowledgment, and manages JetStream streams.
 
-### Operations
+  ### Operations
 
-This node supports multiple operations for stream management and message publishing:
+  This node supports multiple operations for stream management and message publishing:
 
-#### Publish Messages (default)
+  #### Publish Messages (default)
 
-Publishes messages to a JetStream stream with persistence and acknowledgment.
+  Publishes messages to a JetStream stream with persistence and acknowledgment.
 
-**Create Stream on initialization**: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.
+  **Create Stream on initialization**: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.
 
-**Schedule** (Publish mode only): configure a one-time (ISO date) or recurring (cron) delayed delivery without hand-building `msg.schedule`. Requires the stream's "Allow Message Schedules" option. Cron, `every`, `predefined`, and `timezone` need nats-server &ge;2.14.0; one-time `at` scheduling needs &ge;2.12.0 - an older server rejects the publish with a real error rather than silently ignoring the schedule. A message that already sets `msg.schedule` or `msg.options.schedule` always overrides these fields.
+  **Schedule** (Publish mode only): configure a one-time (ISO date) or recurring (cron) delayed delivery without hand-building `msg.schedule`. Requires the stream's "Allow Message Schedules" option and the supported nats-server floor of &ge;2.14.0. A message that already sets `msg.schedule` or `msg.options.schedule` always overrides these fields.
 
-**Optimistic Concurrency** (Publish mode only): "Expect Last Msg ID" and "Expect Last Sequence" reject the publish unless the stream's real state matches, without hand-building `msg.options.expect`. A message that already sets `msg.options.expect` always wins over these fields. Other `StreamExpectations` fields (expected stream name, last-subject-sequence) stay reachable only via `msg.options.expect`.
+  **Optimistic Concurrency** (Publish mode only): "Expect Last Msg ID" and "Expect Last Sequence" reject the publish unless the stream's real state matches, without hand-building `msg.options.expect`. A message that already sets `msg.options.expect` always wins over these fields. Other `StreamExpectations` fields (expected stream name, last-subject-sequence) stay reachable only via `msg.options.expect`.
 
-**Persist Mode**: "Default" syncs to disk before acknowledging a publish (strongest durability). "Async" acknowledges before the disk sync completes, trading some durability for throughput - only takes effect on file-storage streams. Fixed at stream creation - confirmed against a real broker that the server rejects any later attempt to change it on an existing stream ("stream configuration update can not change persist mode"), unlike "Allow Direct" (freely toggleable) or "Allow Message TTL"/"Allow Message Schedules" (one-way latches) above. Set it correctly at creation time; changing it later means recreating the stream.
+  **Persist Mode**: "Default" syncs to disk before acknowledging a publish (strongest durability). "Async" acknowledges before the disk sync completes, trading some durability for throughput - only takes effect on file-storage streams. Fixed at stream creation - confirmed against a real broker that the server rejects any later attempt to change it on an existing stream ("stream configuration update can not change persist mode"), unlike "Allow Direct" (freely toggleable) or "Allow Message TTL"/"Allow Message Schedules" (one-way latches) above. Set it correctly at creation time; changing it later means recreating the stream.
 
-#### Create Stream
+  #### Create Stream
 
-Creates a new JetStream stream with the configured settings. The node will display **"stream {name} created"** for 2 seconds upon successful creation, then return to showing the connection state.
+  Creates a new JetStream stream with the configured settings. The node will display **"stream {name} created"** for 2 seconds upon successful creation, then return to showing the connection state.
 
-#### Update Stream
+  #### Update Stream
 
-Updates an existing stream's configuration. Can be triggered via node configuration or by sending a message with `msg.operation = "update"`.
+  Updates an existing stream's configuration. Can be triggered via node configuration or by sending a message with `msg.operation = "update"`.
 
-#### Update Subjects Only
+  #### Update Subjects Only
 
-Updates only the subject patterns for an existing stream without changing other settings.
+  Updates only the subject patterns for an existing stream without changing other settings.
 
-#### Stream Info
+  #### Stream Info
 
-Retrieves detailed information about a stream including configuration, state, and statistics.
+  Retrieves detailed information about a stream including configuration, state, and statistics.
 
-#### Delete Stream
+  #### Delete Stream
 
-Permanently deletes a stream and all its messages.
+  Permanently deletes a stream and all its messages.
 
-#### Purge Stream
+  #### Purge Stream
 
-Removes all messages from a stream while keeping the stream itself.
+  Removes all messages from a stream while keeping the stream itself.
 
-#### List Streams
+  #### List Streams
 
-Lists all available streams in the JetStream server.
+  Lists all available streams in the JetStream server.
 
-#### Batch Publish (atomic)
+  #### Batch Publish (atomic)
 
-Publishes multiple messages to the target stream atomically, via
-`JetStreamClient.startBatch()`/`.add()`/`.commit()`. Requires "Allow Atomic
-Batch Publish" enabled on the stream.
+  Publishes multiple messages to the target stream atomically, via
+  `JetStreamClient.startBatch()`/`.add()`/`.commit()`. Requires "Allow Atomic
+  Batch Publish" enabled on the stream.
 
-Input is `msg.batch`, an array of at least 2 items (the underlying API
-requires a start message and a commit message, each of which publishes a
-real message - a 1-item batch isn't representable): `{ subject, payload,
+  Input is `msg.batch`, an array of at least 2 items (the underlying API
+  requires a start message and a commit message, each of which publishes a
+  real message - a 1-item batch isn't representable): `{ subject, payload,
 headers?, expect?, ack? }`. `expect` (optimistic concurrency) is only
-supported on the first item; `ack` on a middle item makes that one
-message's `add()` call wait for a server round trip instead of firing and
-forgetting. Nothing is durably published unless the whole batch commits -
-an error partway through leaves nothing on the stream (the server abandons
-an incomplete batch after 10 seconds of inactivity). Server limits: at
-most 1000 messages per batch, at most 50 concurrent batches per stream.
+  supported on the first item; `ack` on a middle item makes that one
+  message's `add()` call wait for a server round trip instead of firing and
+  forgetting. Nothing is durably published unless the whole batch commits -
+  an error partway through leaves nothing on the stream (the server abandons
+  an incomplete batch after 10 seconds of inactivity). Server limits: at
+  most 1000 messages per batch, at most 50 concurrent batches per stream.
 
-Output: `msg.payload` is the real `BatchAck` (`{ batch, count, stream,
+  Output: `msg.payload` is the real `BatchAck` (`{ batch, count, stream,
 seq, duplicate }`) from the commit call.
 
-### Inputs (Publish)
+  ### Inputs (Publish)
 
-: payload (any) : Data to publish to the stream
-: subject (string, optional) : Target subject (overrides default subject configuration)
-: headers (object, optional) : Message headers to attach
-: _msgID (string, optional) : Optional message ID for deduplication within the duplicate window
-: options (object, optional) : Native `JetStreamPublishOptions`, including timeout, retries, expect, ttl, schedule, and cancelSchedule
-: schedule (object, optional) : Convenience alias for `msg.options.schedule`
-: cancelSchedule (object, optional) : Convenience alias for `msg.options.cancelSchedule`
-: expectLastMsgID (string, optional) : Reject the publish unless the stream's last message ID matches. Overrides the node's Expect Last Msg ID field
-: expectLastSequence (number, optional) : Reject the publish unless the stream's last sequence matches. Overrides the node's Expect Last Sequence field
+  : payload (any) : Data to publish to the stream
+  : subject (string, optional) : Target subject (overrides default subject configuration)
+  : headers (object, optional) : Message headers to attach
+  : _msgID (string, optional) : Optional message ID for deduplication within the duplicate window
+  : options (object, optional) : Native `JetStreamPublishOptions`, including timeout, retries, expect, ttl, schedule, and cancelSchedule
+  : schedule (object, optional) : Convenience alias for `msg.options.schedule`
+  : cancelSchedule (object, optional) : Convenience alias for `msg.options.cancelSchedule`
+  : expectLastMsgID (string, optional) : Reject the publish unless the stream's last message ID matches. Overrides the node's Expect Last Msg ID field
+  : expectLastSequence (number, optional) : Reject the publish unless the stream's last sequence matches. Overrides the node's Expect Last Sequence field
 
-### Inputs (Stream Operations)
+  ### Inputs (Stream Operations)
 
-: operation (string, optional) : Operation to perform: "create", "update", "update-subjects", "info", "delete", "purge", "list"
-: stream (string, optional) : Stream name (overrides node configuration)
-: payload (object, optional) : For create/update operations: full stream configuration in NATS native format. See [NATS Stream Configuration](https://docs.nats.io/nats-concepts/jetstream/streams)
-: subjects (string[] | string, optional) : Subject patterns for the stream (array or comma-separated string)
-: retention (string, optional) : Retention policy: "limits", "interest", or "workqueue"
-: maxMessages (number, optional) : Maximum number of messages (-1 for unlimited)
-: maxBytes (number, optional) : Maximum total bytes (-1 for unlimited)
-: maxAge (string, optional) : Maximum message age (e.g., "24h", "7d")
+  : operation (string, optional) : Operation to perform: "create", "update", "update-subjects", "info", "delete", "purge", "list"
+  : stream (string, optional) : Stream name (overrides node configuration)
+  : payload (object, optional) : For create/update operations: full stream configuration in NATS native format. See [NATS Stream Configuration](https://docs.nats.io/nats-concepts/jetstream/streams)
+  : subjects (string[] | string, optional) : Subject patterns for the stream (array or comma-separated string)
+  : retention (string, optional) : Retention policy: "limits", "interest", or "workqueue"
+  : maxMessages (number, optional) : Maximum number of messages (-1 for unlimited)
+  : maxBytes (number, optional) : Maximum total bytes (-1 for unlimited)
+  : maxAge (string, optional) : Maximum message age (e.g., "24h", "7d")
 
-### Outputs (Publish)
+  ### Outputs (Publish)
 
-: sequence (number) : Message sequence number in the stream
-: stream (string) : Stream name where message was published
-: published (boolean) : True if published successfully, false on error
-: subject (string) : Subject where message was published
-: _duplicate (boolean, optional) : True if message was detected as a duplicate
+  : sequence (number) : Message sequence number in the stream
+  : stream (string) : Stream name where message was published
+  : published (boolean) : True if published successfully, false on error
+  : subject (string) : Subject where message was published
+  : _duplicate (boolean, optional) : True if message was detected as a duplicate
 
-### Outputs (Stream Operations)
+  ### Outputs (Stream Operations)
 
-: payload (object) : Operation result containing success status, stream name, and relevant data
-: operation (string) : The operation that was performed
-: config (object, optional) : Stream configuration (for info, create, update operations)
-: state (object, optional) : Stream state including message count, bytes, etc. (for info operation)
+  : payload (object) : Operation result containing success status, stream name, and relevant data
+  : operation (string) : The operation that was performed
+  : config (object, optional) : Stream configuration (for info, create, update operations)
+  : state (object, optional) : Stream state including message count, bytes, etc. (for info operation)
 
-### Stream Configuration
+  ### Stream Configuration
 
-Streams can be configured with various settings (only visible when "Create Stream on initialization" is enabled in Publish mode):
+  Streams can be configured with various settings (only visible when "Create Stream on initialization" is enabled in Publish mode):
 
- - **Stream Name**: Unique identifier for the stream
- - **Subject Pattern**: Wildcards pattern for subjects captured (e.g., "sensor.*")
- - **Retention Policy**: How messages are retained (limits/interest/workqueue)
- - **Storage**: File-based (persistent) or memory-based (fast but volatile)
- - **Limits**: Max messages, bytes, age, and per-subject limits
- - **Deduplication**: Time window for detecting duplicate messages
- - **Replicas**: Number of stream replicas for high availability
+  - **Stream Name**: Unique identifier for the stream
+  - **Subject Pattern**: Wildcards pattern for subjects captured (e.g., "sensor.*")
+  - **Retention Policy**: How messages are retained (limits/interest/workqueue)
+  - **Storage**: File-based (persistent) or memory-based (fast but volatile)
+  - **Limits**: Max messages, bytes, age, and per-subject limits
+  - **Deduplication**: Time window for detecting duplicate messages
+  - **Replicas**: Number of stream replicas for high availability
 
-### Node Status
+  ### Node Status
 
-The node displays its current state:
+  The node displays its current state:
 
- - **connected** (green): Connected to NATS server
- - **connecting** (yellow): Attempting to connect
- - **disconnected** (red): Not connected
- - **stream {name} created** (green, 2 seconds): Stream successfully created
+  - **connected** (green): Connected to NATS server
+  - **connecting** (yellow): Attempting to connect
+  - **disconnected** (red): Not connected
+  - **stream {name} created** (green, 2 seconds): Stream successfully created
 
-### Examples
+  ### Examples
 
-#### Publish Message
+  #### Publish Message
 
-```
-msg.subject = "sensor.temperature";
-msg.payload = { value: 22.5, unit: "C" };
-return msg;
-```
+  ```
+  msg.subject = "sensor.temperature";
+  msg.payload = { value: 22.5, unit: "C" };
+  return msg;
+  ```
 
-#### Create Stream Programmatically (Simple)
+  #### Create Stream Programmatically (Simple)
 
-```
-msg.operation = "create";
-msg.stream = "my-stream";
-msg.subjects = ["data.>"];
-msg.retention = "limits";
-msg.maxMessages = 1000;
-msg.maxAge = "24h";
-return msg;
-```
+  ```
+  msg.operation = "create";
+  msg.stream = "my-stream";
+  msg.subjects = ["data.>"];
+  msg.retention = "limits";
+  msg.maxMessages = 1000;
+  msg.maxAge = "24h";
+  return msg;
+  ```
 
-#### Create Stream Programmatically (Native NATS Format)
+  #### Create Stream Programmatically (Native NATS Format)
 
-```
-msg.operation = "create";
-msg.payload = {
-    name: "my-stream",
-    subjects: ["data.>"],
-    retention: "limits",
-    max_msgs: 1000,
-    max_age: 86400000000000,  // 24h in nanoseconds
-    storage: "file"
-};
-return msg;
-```
+  ```
+  msg.operation = "create";
+  msg.payload = {
+      name: "my-stream",
+      subjects: ["data.>"],
+      retention: "limits",
+      max_msgs: 1000,
+      max_age: 86400000000000,  // 24h in nanoseconds
+      storage: "file"
+  };
+  return msg;
+  ```
 
-#### Get Stream Info
+  #### Get Stream Info
 
-```
-msg.operation = "info";
-msg.stream = "my-stream";
-return msg;
-```
+  ```
+  msg.operation = "info";
+  msg.stream = "my-stream";
+  return msg;
+  ```
 
-#### Schedule a Message
+  #### Schedule a Message
 
-The Schedule section's editor fields cover one-time and cron scheduling without a Function node - set **Schedule Type** to "One-time (ISO date)" or "Recurring (cron)", fill in **Fire At**/**Cron Expression** and **Delivery Target Subject**, and every publish through this node is scheduled automatically.
+  The Schedule section's editor fields cover one-time and cron scheduling without a Function node - set **Schedule Type** to "One-time (ISO date)" or "Recurring (cron)", fill in **Fire At**/**Cron Expression** and **Delivery Target Subject**, and every publish through this node is scheduled automatically.
 
-For anything the editor fields don't cover (`every`, `predefined`, `rollup`, `source`, `ttl`, or a schedule decided at runtime), set `msg.schedule` directly - it always overrides the editor fields:
+  For anything the editor fields don't cover (`every`, `predefined`, `rollup`, `source`, `ttl`, or a schedule decided at runtime), set `msg.schedule` directly - it always overrides the editor fields:
 
-```
-msg.subject = "schedules.orders." + msg._msgid;
-msg.schedule = {
-  specification: { at: new Date(Date.now() + 30000).toISOString() },
-  target: "orders"
-};
-return msg;
-```
+  ```
+  msg.subject = "schedules.orders." + msg._msgid;
+  msg.schedule = {
+    specification: { at: new Date(Date.now() + 30000).toISOString() },
+    target: "orders"
+  };
+  return msg;
+  ```
 
-### Details
+  ### Details
 
-This node provides comprehensive JetStream stream management alongside message publishing. When publishing, messages receive acknowledgments and sequence numbers. The stream is automatically created on startup if it doesn't exist, with configuration from the node settings.
+  This node provides comprehensive JetStream stream management alongside message publishing. When publishing, messages receive acknowledgments and sequence numbers. The stream is automatically created on startup if it doesn't exist, with configuration from the node settings.
 
-For advanced use cases, stream operations can be performed programmatically by setting `msg.operation` to the desired action. Stream configurations can be provided either as individual message properties or as a complete NATS-native configuration object in `msg.payload`.
+  For advanced use cases, stream operations can be performed programmatically by setting `msg.operation` to the desired action. Stream configurations can be provided either as individual message properties or as a complete NATS-native configuration object in `msg.payload`.
 
-For more information about NATS JetStream stream configuration, see the [NATS JetStream Streams Documentation](https://docs.nats.io/nats-concepts/jetstream/streams).
+  For more information about NATS JetStream stream configuration, see the [NATS JetStream Streams Documentation](https://docs.nats.io/nats-concepts/jetstream/streams).
 </script>

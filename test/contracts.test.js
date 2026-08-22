@@ -381,14 +381,11 @@ test('server-manager: Catch/Complete fire correctly and close awaits process exi
   const dbgCat = `${id}dbgcat`;
   const cmp = `${id}cmp`;
   const dbgCmp = `${id}dbgcmp`;
-  // 'auto' binarySource only checks nats-memory-server cache paths (removed
-  // from this repo's dependencies) and the system PATH - it can't find the
-  // binaries docker-compose.yml mounts at /data/bin for exactly this case.
-  // Pointing at 'custom' is a test-only workaround for that pre-existing,
-  // out-of-scope gap, not something Step 6 is fixing.
+  // The harness copies the current test broker's binary into the shared bin
+  // mount, so this exercises Server Manager at the same supported version.
   const binOverrides = {
     binarySource: 'custom',
-    customBinaryPath: `/data/bin/nats-server-v2.12.2-linux-${process.arch === 'arm64' ? 'arm64' : 'amd64'}`,
+    customBinaryPath: '/data/bin/nats-server',
   };
 
   const nodes = [
@@ -399,9 +396,7 @@ test('server-manager: Catch/Complete fire correctly and close awaits process exi
     }),
     injectNode(injStatus, sm, [{ p: 'command', v: 'status', vt: 'str' }]),
     injectNode(injStart, sm, [{ p: 'command', v: 'start', vt: 'str' }]),
-    injectNode(injBadStart, badSm, [
-      { p: 'command', v: 'start', vt: 'str' },
-    ]),
+    injectNode(injBadStart, badSm, [{ p: 'command', v: 'start', vt: 'str' }]),
     catchNode(cat, [badSm], dbgCat),
     debugNode(dbgCat),
     completeNode(cmp, [sm], dbgCmp),

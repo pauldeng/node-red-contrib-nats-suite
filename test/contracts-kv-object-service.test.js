@@ -254,7 +254,6 @@ test('object-get: Catch fires on "no object name specified", Complete fires on l
     type: 'nats-suite-object-get',
     config: {
       bucket,
-      bucketConfig: '',
       description: '',
       maxAge: 0,
       maxBytes: 0,
@@ -280,7 +279,6 @@ test('object-put: Catch fires on "no object name specified", Complete fires on a
     type: 'nats-suite-object-put',
     config: {
       bucket,
-      bucketConfig: '',
       nameFrom: 'msg',
       dataFrom: 'payload',
       contentType: '',
@@ -341,9 +339,7 @@ test('service (service mode): failed start fires Catch and real start fires Comp
       wires: [[]],
     },
     injectNode(inj, node, [{ p: 'operation', v: 'start', vt: 'str' }]),
-    injectNode(badInj, badNode, [
-      { p: 'operation', v: 'start', vt: 'str' },
-    ]),
+    injectNode(badInj, badNode, [{ p: 'operation', v: 'start', vt: 'str' }]),
     completeNode(cmp, [node], dbg),
     debugNode(dbg),
     catchNode(cat, [badNode], dbgCat),

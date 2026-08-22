@@ -31,7 +31,7 @@
       reconnectThreshold: { value: 5 },
       throughputThreshold: { value: 1000 },
       // Common
-      debug: { value: false }
+      debug: { value: false },
     },
     inputs: 1,
     outputs: 1,
@@ -40,42 +40,48 @@
     label: function () {
       try {
         // If custom name is set, use it
-        if (this.name && typeof this.name === 'string' && this.name.trim() !== '') {
+        if (
+          this.name &&
+          typeof this.name === 'string' &&
+          this.name.trim() !== ''
+        ) {
           return this.name;
         }
-        
+
         const mode = this.mode || 'discover';
-        
+
         if (mode === 'service') {
-          const serviceName = (this.serviceName && typeof this.serviceName === 'string') 
-            ? this.serviceName.trim() 
-            : 'service';
+          const serviceName =
+            this.serviceName && typeof this.serviceName === 'string'
+              ? this.serviceName.trim()
+              : 'service';
           return serviceName ? `service (${serviceName})` : 'service';
         }
-        
+
         if (mode === 'health') {
           return 'health';
         }
-        
+
         if (mode === 'nats-stats') {
-          const statsType = (this.statsType && typeof this.statsType === 'string') 
-            ? this.statsType 
-            : 'server';
+          const statsType =
+            this.statsType && typeof this.statsType === 'string'
+              ? this.statsType
+              : 'server';
           return `stats (${statsType})`;
         }
-        
+
         if (mode === 'discover') {
           return 'service discover';
         }
-        
+
         if (mode === 'stats') {
           return 'service stats';
         }
-        
+
         if (mode === 'ping') {
           return 'service ping';
         }
-        
+
         return `service ${mode}`;
       } catch (err) {
         // Fallback if label function fails
@@ -83,14 +89,14 @@
       }
     },
     paletteLabel: 'nats service',
-    oneditprepare: function() {
+    oneditprepare: function () {
       // Preserve the discovery filter stored in serviceName by pre-Step-5 flows.
       if (this.discoveryFilter === undefined && this.mode !== 'service') {
         $('#node-input-discoveryFilter').val(this.serviceName || '*');
       }
 
       // Mode handler
-      $('#node-input-mode').on('change', function() {
+      $('#node-input-mode').on('change', function () {
         const mode = $(this).val();
         if (mode === 'service') {
           $('#service-config').slideDown(200);
@@ -114,12 +120,12 @@
           $('#nats-stats-config').slideUp(200);
         }
       });
-      
+
       // Initialize mode-based visibility
       $('#node-input-mode').trigger('change');
-      
+
       // Periodic check handler
-      $('#node-input-periodicCheck').on('change', function() {
+      $('#node-input-periodicCheck').on('change', function () {
         if ($(this).is(':checked')) {
           $('#check-interval-row').slideDown(200);
         } else {
@@ -127,15 +133,15 @@
         }
       });
       $('#node-input-periodicCheck').trigger('change');
-      
+
       // Note: Node-RED will automatically update the label when the node is saved
       // The label() function will be called with the updated config values
     },
-    oneditresize: function(size) {
+    oneditresize: function (size) {
       // This is called when the edit dialog is resized
       // Can be used to trigger label update
       return size;
-    }
+    },
   });
 </script>
 
@@ -284,55 +290,55 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-service">
-NATS Service API for microservice discovery, health monitoring, and endpoints.
+  NATS Service API for microservice discovery, health monitoring, and endpoints.
 
-### Modes
+  ### Modes
 
- - Discovery - find available services
- - Stats - get service statistics
- - Ping - check service availability
- - Service - run a service endpoint
- - Health - monitor NATS server health
- - NATS Stats - get NATS server/JetStream statistics
+  - Discovery - find available services
+  - Stats - get service statistics
+  - Ping - check service availability
+  - Service - run a service endpoint
+  - Health - monitor NATS server health
+  - NATS Stats - get NATS server/JetStream statistics
 
-### Service Mode
+  ### Service Mode
 
-Process requests and respond, in a function node wired to this node's output:
+  Process requests and respond, in a function node wired to this node's output:
 
-```javascript
-msg.respond({ result: "success" });
-// or
-msg.respondError("Error message", "ERROR_CODE");
-```
+  ```javascript
+  msg.respond({ result: 'success' });
+  // or
+  msg.respondError('Error message', 'ERROR_CODE');
+  ```
 
-### Health Mode
+  ### Health Mode
 
-Outputs health status:
+  Outputs health status:
 
-: payload.status (string) : `"healthy"`, `"warning"`, or `"unhealthy"`
-: payload.connection (object) : connection status, latency, uptime
-: payload.stats (object) : messages sent/received, throughput
-: payload.alerts (array) : threshold violations
+  : payload.status (string) : `"healthy"`, `"warning"`, or `"unhealthy"`
+  : payload.connection (object) : connection status, latency, uptime
+  : payload.stats (object) : messages sent/received, throughput
+  : payload.alerts (array) : threshold violations
 
-### NATS Stats Mode
+  ### NATS Stats Mode
 
-Stats types:
+  Stats types:
 
- - server - messages, bytes, reconnects
- - jetstream - memory, storage, API stats
- - connections - server info, active connections
- - all - combined statistics
+  - server - messages, bytes, reconnects
+  - jetstream - memory, storage, API stats
+  - connections - server info, active connections
+  - all - combined statistics
 
-### Dynamic Operations
+  ### Dynamic Operations
 
-Send `msg.operation` to trigger:
+  Send `msg.operation` to trigger:
 
- - `discover` - find services
- - `stats` - get service stats
- - `ping` - ping services
- - `start` - start service
- - `stop` - stop service
- - `reset` - reset the running service's stats (requests/errors/processing-time counters, both the library's own and this node's local status counters) - only valid while the service is running
- - `health` - run health check
- - `nats-stats` - get NATS statistics (use `msg.statsType`)
+  - `discover` - find services
+  - `stats` - get service stats
+  - `ping` - ping services
+  - `start` - start service
+  - `stop` - stop service
+  - `reset` - reset the running service's stats (requests/errors/processing-time counters, both the library's own and this node's local status counters) - only valid while the service is running
+  - `health` - run health check
+  - `nats-stats` - get NATS statistics (use `msg.statsType`)
 </script>

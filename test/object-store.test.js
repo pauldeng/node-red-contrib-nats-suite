@@ -170,7 +170,7 @@ test('object store: link() to another object in the same bucket resolves to the 
     assert.equal(
       Buffer.concat(chunks).toString('utf8'),
       'link target payload',
-      'reading through the link must return the target object\'s actual data'
+      "reading through the link must return the target object's actual data"
     );
 
     // "links of links are rejected" per the upstream doc comment - the
@@ -239,7 +239,11 @@ test('object store: seal() causes the real server to reject a subsequent put', a
     await os.putBlob({ name: 'before-seal.txt' }, Buffer.from('ok'));
 
     const status = await os.seal();
-    assert.equal(status.sealed, true, 'seal() must report the bucket as sealed');
+    assert.equal(
+      status.sealed,
+      true,
+      'seal() must report the bucket as sealed'
+    );
 
     await assert.rejects(
       () => os.putBlob({ name: 'after-seal.txt' }, Buffer.from('rejected')),

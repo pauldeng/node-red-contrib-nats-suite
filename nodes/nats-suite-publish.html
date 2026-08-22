@@ -18,7 +18,7 @@
       requestManyStrategy: { value: 'timer' }, // 'timer', 'count', 'stall', 'sentinel'
       requestManyMaxWait: { value: 2000 },
       requestManyMaxMessages: { value: 0 },
-      requestManyStall: { value: 200 }
+      requestManyStall: { value: 200 },
     },
     inputs: 1,
     outputs: 0,
@@ -28,20 +28,20 @@
       return this.name || 'nats publish';
     },
     paletteLabel: 'nats publish',
-    oneditprepare: function() {
+    oneditprepare: function () {
       // Collapsible sections
-      $('.nats-section-header').on('click', function() {
+      $('.nats-section-header').on('click', function () {
         const $header = $(this);
         const $content = $header.next('.nats-section-content');
         const $icon = $header.find('.nats-section-toggle');
-        
+
         $content.slideToggle(200);
         $icon.toggleClass('fa-chevron-down fa-chevron-right');
         $header.toggleClass('collapsed');
       });
-      
+
       // Headers configuration
-      $('#node-input-enableHeaders').on('change', function() {
+      $('#node-input-enableHeaders').on('change', function () {
         if ($(this).is(':checked')) {
           $('#headers-options').slideDown(200);
         } else {
@@ -51,8 +51,12 @@
 
       const updateOutputs = () => {
         const mode = $('#node-input-mode').val();
-        this.outputs = (mode === 'request' || mode === 'requestMany' ||
-          (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
+        this.outputs =
+          mode === 'request' ||
+          mode === 'requestMany' ||
+          (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))
+            ? 1
+            : 0;
       };
 
       const updateAutoReply = mode => {
@@ -64,10 +68,13 @@
         $('#request-many-maxmessages-row').toggle(strategy === 'count');
         $('#request-many-stall-row').toggle(strategy === 'stall');
       };
-      $('#node-input-requestManyStrategy').on('change', updateRequestManyVisibility);
+      $('#node-input-requestManyStrategy').on(
+        'change',
+        updateRequestManyVisibility
+      );
 
       // Mode configuration - affects outputs and visibility
-      $('#node-input-mode').on('change', function() {
+      $('#node-input-mode').on('change', function () {
         const mode = $(this).val();
 
         // Show/hide request timeout section
@@ -106,12 +113,16 @@
       updateRequestManyVisibility();
     },
 
-    oneditsave: function() {
+    oneditsave: function () {
       const mode = $('#node-input-mode').val();
 
-      this.outputs = (mode === 'request' || mode === 'requestMany' ||
-        (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
-    }
+      this.outputs =
+        mode === 'request' ||
+        mode === 'requestMany' ||
+        (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))
+          ? 1
+          : 0;
+    },
   });
 </script>
 
@@ -310,7 +321,7 @@
   </style>
 
   <div class="nats-publish-config">
-    
+
     <!-- Basic Configuration -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -325,19 +336,19 @@
           <label><i class="fa fa-tag"></i>Name</label>
           <input type="text" id="node-input-name" placeholder="Optional display name">
         </div>
-        
+
         <div class="nats-form-row">
           <label><i class="fa fa-server"></i>NATS Server</label>
           <input type="text" id="node-input-server">
         </div>
-        
+
         <div class="nats-checkbox-row">
           <input type="checkbox" id="node-input-debug">
           <label for="node-input-debug"><i class="fa fa-bug"></i>Enable Debug Logging</label>
         </div>
       </div>
     </div>
-    
+
     <!-- Message Configuration -->
     <div class="nats-section">
       <div class="nats-section-header">
@@ -368,7 +379,7 @@
           <input type="checkbox" id="node-input-enableTopicOverride">
           <label for="node-input-enableTopicOverride"><i class="fa fa-exchange"></i>Allow msg.topic to override subject</label>
         </div>
-        
+
         <div class="nats-form-row">
           <label><i class="fa fa-file-code-o"></i>Data Format</label>
           <select id="node-input-dataformat">
@@ -377,7 +388,7 @@
             <option value="buffer">Buffer (binary data)</option>
           </select>
         </div>
-        
+
         <!-- Request Timeout (shown when mode is 'request') -->
         <div id="requestreply-options" class="nats-options">
           <div class="nats-form-row">
@@ -460,7 +471,7 @@
         <i class="fa fa-chevron-down nats-section-toggle"></i>
       </div>
       <div class="nats-section-content">
-        
+
         <!-- Headers -->
         <div class="nats-checkbox-row">
           <input type="checkbox" id="node-input-enableHeaders">
@@ -484,86 +495,86 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-publish">
-Publishes messages to NATS subjects with advanced features.
+  Publishes messages to NATS subjects with advanced features.
 
-### Inputs
+  ### Inputs
 
-: payload (any) : The data to publish. Format depends on the selected data format.
-: topic (string, optional) : Override the configured NATS subject (only if "Allow msg.topic to override subject" is enabled in publish/request modes).
-: headers (object, optional) : Dynamic NATS headers to include with the message.
-: _reply / _unsreply (string, optional) : Reply-to subject used when mode is set to "Reply".
+  : payload (any) : The data to publish. Format depends on the selected data format.
+  : topic (string, optional) : Override the configured NATS subject (only if "Allow msg.topic to override subject" is enabled in publish/request modes).
+  : headers (object, optional) : Dynamic NATS headers to include with the message.
+  : _reply / _unsreply (string, optional) : Reply-to subject used when mode is set to "Reply".
 
-### Data Formats
+  ### Data Formats
 
- - **JSON:** Automatically stringifies objects
- - **String:** Sends payload as-is
- - **Buffer:** Binary data support
+  - **JSON:** Automatically stringifies objects
+  - **String:** Sends payload as-is
+  - **Buffer:** Binary data support
 
-### Features
+  ### Features
 
-#### Message Headers
+  #### Message Headers
 
-Add custom NATS headers to messages. Static headers configured in the node are merged with dynamic headers from `msg.headers`.
+  Add custom NATS headers to messages. Static headers configured in the node are merged with dynamic headers from `msg.headers`.
 
-```
-msg.headers = {
-  "X-User": "john",
-  "X-Request-ID": "abc123"
-};
-```
+  ```
+  msg.headers = {
+    "X-User": "john",
+    "X-Request-ID": "abc123"
+  };
+  ```
 
-#### Request-Reply Mode (Client Side)
+  #### Request-Reply Mode (Client Side)
 
-Enables the NATS request-reply pattern. The node sends a request to the configured subject and waits for a reply.
+  Enables the NATS request-reply pattern. The node sends a request to the configured subject and waits for a reply.
 
- - Automatically generates a unique inbox subject for the reply
- - Waits for response up to the configured timeout
- - Reply message appears at the node output
- - On timeout: `msg.error` contains timeout information
+  - Automatically generates a unique inbox subject for the reply
+  - Waits for response up to the configured timeout
+  - Reply message appears at the node output
+  - On timeout: `msg.error` contains timeout information
 
-```
-// Input
-msg.payload = { action: "getData", id: 123 };
-msg.topic = "my.service";
+  ```
+  // Input
+  msg.payload = { action: "getData", id: 123 };
+  msg.topic = "my.service";
 
-// Output (on success)
-msg.payload = { result: "data..." };
-msg.requestTime = 45; // ms
+  // Output (on success)
+  msg.payload = { result: "data..." };
+  msg.requestTime = 45; // ms
 
-// Output (on timeout)
-msg.error = { message: "Request timeout", code: "TIMEOUT" };
-```
+  // Output (on timeout)
+  msg.error = { message: "Request timeout", code: "TIMEOUT" };
+  ```
 
-#### Auto-Reply Handler (Service Side)
+  #### Auto-Reply Handler (Service Side)
 
-For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.
+  For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.
 
-#### Request Many (Scatter-Gather)
+  #### Request Many (Scatter-Gather)
 
-Broadcasts one request and collects every reply that arrives within a bounded window into a single output message - useful for "ask N services, gather whatever answers" patterns. Unlike Request mode, there is no fallback-to-publish on timeout: an empty or partial batch is a normal result, not a failure.
+  Broadcasts one request and collects every reply that arrives within a bounded window into a single output message - useful for "ask N services, gather whatever answers" patterns. Unlike Request mode, there is no fallback-to-publish on timeout: an empty or partial batch is a normal result, not a failure.
 
- - **Timer** - collect until Max Wait elapses, whatever arrived by then wins.
- - **Count** - stop as soon as Max Messages replies arrive (still bounded by Max Wait as a safety net).
- - **Stall** - stop once no new reply has arrived for the Stall Window, even if Max Wait hasn't elapsed yet (renamed from the v2 client's "Jitter" strategy).
- - **Sentinel** - stop when a responder sends an empty reply signalling "no more coming" (a protocol convention some services use, not something this node injects).
+  - **Timer** - collect until Max Wait elapses, whatever arrived by then wins.
+  - **Count** - stop as soon as Max Messages replies arrive (still bounded by Max Wait as a safety net).
+  - **Stall** - stop once no new reply has arrived for the Stall Window, even if Max Wait hasn't elapsed yet (renamed from the v2 client's "Jitter" strategy).
+  - **Sentinel** - stop when a responder sends an empty reply signalling "no more coming" (a protocol convention some services use, not something this node injects).
 
-Max Messages only takes effect on the Count strategy (verified against a real broker: the other three strategies silently ignore it). A responder that never replies cannot hang this node past Max Wait, regardless of strategy.
+  Max Messages only takes effect on the Count strategy (verified against a real broker: the other three strategies silently ignore it). A responder that never replies cannot hang this node past Max Wait, regardless of strategy.
 
-```
-// Input
-msg.payload = { action: "healthCheck" };
-msg.topic = "workers.broadcast";
+  ```
+  // Input
+  msg.payload = { action: "healthCheck" };
+  msg.topic = "workers.broadcast";
 
-// Output (always exactly one message, however many replies arrived)
-msg.payload = [{ status: "ok" }, { status: "ok" }];       // decoded payloads
-msg.replies = [{ payload: {...}, headers: {...}, subject: "..." }, ...];
-msg.replyCount = 2;
-```
+  // Output (always exactly one message, however many replies arrived)
+  msg.payload = [{ status: "ok" }, { status: "ok" }];       // decoded payloads
+  msg.replies = [{ payload: {...}, headers: {...}, subject: "..." }, ...];
+  msg.replyCount = 2;
+  ```
 
-Per-message overrides (all optional, fall back to the node's configured defaults): `msg.requestManyStrategy`, `msg.requestManyMaxWait`, `msg.requestManyMaxMessages`, `msg.requestManyStall`.
+  Per-message overrides (all optional, fall back to the node's configured defaults): `msg.requestManyStrategy`, `msg.requestManyMaxWait`, `msg.requestManyMaxMessages`, `msg.requestManyStall`.
 
-### Subject Wildcards
+  ### Subject Wildcards
 
- - `*` - matches a single token (e.g., `sensor.*.temperature`)
- - `>` - matches one or more tokens (e.g., `sensor.>`)
+  - `*` - matches a single token (e.g., `sensor.*.temperature`)
+  - `>` - matches one or more tokens (e.g., `sensor.>`)
 </script>

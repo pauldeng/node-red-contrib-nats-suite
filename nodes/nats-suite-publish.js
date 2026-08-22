@@ -21,8 +21,6 @@ module.exports = function (RED) {
     const setStatusGreen = () =>
       node.status({ fill: 'green', shape: 'dot', text: 'connected' });
 
-    let connectionTimeout = null;
-    let connectionStartTime = null;
     let statusRestoreTimer = null;
 
     setStatusRed();
@@ -32,17 +30,9 @@ module.exports = function (RED) {
 
     const detachStatus = attachStatus(node, this.config, {
       connected: () => {
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
-        }
         setStatusGreen();
       },
       disconnected: statusInfo => {
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
-        }
         node.status({
           fill: 'red',
           shape: 'ring',
@@ -55,14 +45,6 @@ module.exports = function (RED) {
           shape: 'ring',
           text: `connecting (${statusInfo.reconnectAttempts || 0})`,
         });
-        connectionStartTime = Date.now();
-        if (connectionTimeout) clearTimeout(connectionTimeout);
-        connectionTimeout = setTimeout(() => {
-          const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
-          node.warn(
-            `NATS connection taking longer than expected (${elapsed}s). Check server availability.`
-          );
-        }, 10000);
       },
     });
 
@@ -155,10 +137,15 @@ module.exports = function (RED) {
       }
 
       const natsnc = await node.config.getConnection();
-      const requestPayload =
-        typeof msg.payload === 'object'
-          ? JSON.stringify(msg.payload)
-          : String(msg.payload);
+      const requestPayload = encodePayload(msg.payload);
+      if (requestPayload === undefined) {
+        msg.error = {
+          message: `Unknown data format: ${config.dataformat}. Use 'json', 'string', or 'buffer'`,
+          code: 'UNKNOWN_FORMAT',
+        };
+        send(msg);
+        return msg.error;
+      }
       const startTime = Date.now();
 
       node.status({ fill: 'blue', shape: 'ring', text: `request: ${subject}` });
@@ -273,7 +260,11 @@ module.exports = function (RED) {
         return msg.error;
       }
 
-      const requestManyOpts = { strategy, maxWait, ...node.config.getTraceOptions() };
+      const requestManyOpts = {
+        strategy,
+        maxWait,
+        ...node.config.getTraceOptions(),
+      };
 
       // Verified against a real broker: maxMessages is only honored by the
       // 'count' strategy - 'timer'/'stall'/'sentinel' silently ignore it and
@@ -298,10 +289,15 @@ module.exports = function (RED) {
       }
 
       const natsnc = await node.config.getConnection();
-      const requestPayload =
-        typeof msg.payload === 'object'
-          ? JSON.stringify(msg.payload)
-          : String(msg.payload);
+      const requestPayload = encodePayload(msg.payload);
+      if (requestPayload === undefined) {
+        msg.error = {
+          message: `Unknown data format: ${config.dataformat}. Use 'json', 'string', or 'buffer'`,
+          code: 'UNKNOWN_FORMAT',
+        };
+        send(msg);
+        return msg.error;
+      }
       const startTime = Date.now();
 
       node.status({
@@ -331,7 +327,11 @@ module.exports = function (RED) {
               replyHeaders[key] = values.length === 1 ? values[0] : values;
             }
           }
-          replies.push({ payload: replyPayload, headers: replyHeaders, subject: m.subject });
+          replies.push({
+            payload: replyPayload,
+            headers: replyHeaders,
+            subject: m.subject,
+          });
         }
         const elapsed = Date.now() - startTime;
         msg.payload = replies.map(r => r.payload);
@@ -444,10 +444,8 @@ module.exports = function (RED) {
     });
 
     node.on('close', function (done) {
-      // Both timers outlive the node otherwise, firing warn()/status() after close
-      if (connectionTimeout) clearTimeout(connectionTimeout);
       if (statusRestoreTimer) clearTimeout(statusRestoreTimer);
-      connectionTimeout = statusRestoreTimer = null;
+      statusRestoreTimer = null;
       detachStatus();
       node.config.unregisterConnectionUser(node.id);
       done();
