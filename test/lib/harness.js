@@ -271,8 +271,9 @@ function publishDirect(nc, subject, payload) {
 
 // Resolves with the decoded payload of the first message received on
 // `subject`, or rejects after `timeoutMs`. Call this *before* triggering
-// whatever produces the message (the subscription is registered
-// synchronously, before the promise is returned).
+// whatever produces the message. Call `await nc.flush()` after creating the
+// waiter so the server has processed the subscription before an external
+// producer is triggered.
 async function subscribeOnce(nc, subject, timeoutMs = 8000) {
   const sub = nc.subscribe(subject);
   let timer;

@@ -122,6 +122,7 @@ test('publish -> real NATS -> subscribe round-trip, with connected status', asyn
     const debugCaught = comms.waitForDebug('harness-debug', 10000);
     const directCaught = subscribeOnce(directNc, subject, 10000);
 
+    await directNc.flush();
     await triggerInject('harness-inject');
 
     const [debugMsg, directPayload] = await Promise.all([
