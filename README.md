@@ -36,7 +36,7 @@ A comprehensive Node-RED module for NATS (NATS Messaging System) with support fo
 ### JetStream (JetStream Functionality)
 - **Streams**: JetStream Stream management with auto-creation
 - **Publishers**: Publishes messages to streams
-- **Consumers**: Pull/Push consumers with various modes
+- **Consumers**: Pull consumers with various delivery/deliver-policy modes
 - **Retention Policies**: Limits, Interest, Work Queue
 - **Replay**: Message replay functionality
 - **Deduplication**: Automatic deduplication
@@ -365,8 +365,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Stream List | ✅ Complete | `nats-suite-stream-publisher` | List all streams |
 | Update Subjects | ✅ Complete | `nats-suite-stream-publisher` | Update subjects only |
 | Publish to Stream | ✅ Complete | `nats-suite-stream-publisher` | Persistent message publishing |
-| Pull Consumer | ✅ Complete | `nats-suite-stream-consumer` | On-demand message fetching |
-| Push Consumer | ✅ Complete | `nats-suite-stream-consumer` | Automatic message delivery |
+| Pull Consumer | ✅ Complete | `nats-suite-stream-consumer` | On-demand message fetching - the only delivery mode this suite implements (a decorative "push" option existed early on but never did real push delivery; removed) |
 | Consumer Create | ✅ Complete | `nats-suite-stream-consumer` | Create new consumers |
 | Consumer Delete | ✅ Complete | `nats-suite-stream-consumer` | Delete consumers |
 | Consumer Info | ✅ Complete | `nats-suite-stream-consumer` | Get consumer details |
@@ -384,6 +383,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Stream Sources | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Stream Republish | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Subject Transforms | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
+| Atomic Batch Publish | ✅ Complete | `nats-suite-stream-publisher` | `operation: batch-publish`, one `msg.batch` array staged atomically via `startBatch()`/`add()`/`commit()`; requires the stream's `allowAtomic` flag |
 | Consumer Filter Subject | 🔄 Partial | `nats-suite-stream-consumer` | Basic filtering available |
 | Optimistic Concurrency | ✅ Complete | `nats-suite-stream-publisher` | Editor fields for expected last-msg-ID/last-sequence; other `StreamExpectations` fields stay `msg.options.expect`-passthrough-only |
 | Persist Mode | ✅ Complete | `nats-suite-stream-publisher` | `default`/`async` write-durability mode, fixed at stream creation - the server rejects any attempt to change it later |

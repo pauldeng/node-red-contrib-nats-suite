@@ -66,6 +66,19 @@ module.exports = function (RED) {
       jsm = await jetstreamManager(nc);
     };
 
+    // Helper: Convert a plain {key: value} object into a real NATS MsgHdrs
+    // instance, or undefined if there's nothing to convert. Shared by the
+    // regular publish path and batch-publish so a future header-handling
+    // change (e.g. multi-value headers) only needs to land in one place.
+    const buildNatsHeaders = headersObj => {
+      if (!headersObj || typeof headersObj !== 'object') return undefined;
+      const h = natsHeaders();
+      Object.keys(headersObj).forEach(key => {
+        h.append(key, String(headersObj[key]));
+      });
+      return h;
+    };
+
     // Helper: Build a ScheduleOptions fallback from the node's Schedule
     // config fields. Only used when nothing message-level already set a
     // schedule (see the input handler) - editor fields are a convenience on
@@ -152,7 +165,8 @@ module.exports = function (RED) {
           if (
             (config.allowMsgTtl && !info.config.allow_msg_ttl) ||
             (config.allowMsgSchedules && !info.config.allow_msg_schedules) ||
-            (config.allowDirect && !info.config.allow_direct)
+            (config.allowDirect && !info.config.allow_direct) ||
+            (config.allowAtomic && !info.config.allow_atomic)
           ) {
             await jsm.streams.update(config.streamName, {
               ...info.config,
@@ -160,6 +174,7 @@ module.exports = function (RED) {
               allow_msg_schedules:
                 info.config.allow_msg_schedules || !!config.allowMsgSchedules,
               allow_direct: info.config.allow_direct || !!config.allowDirect,
+              allow_atomic: info.config.allow_atomic || !!config.allowAtomic,
             });
           }
           streamReady = true;
@@ -195,6 +210,7 @@ module.exports = function (RED) {
               allow_msg_ttl: !!config.allowMsgTtl,
               allow_msg_schedules: !!config.allowMsgSchedules,
               allow_direct: !!config.allowDirect,
+              allow_atomic: !!config.allowAtomic,
               persist_mode: config.persistMode === 'async' ? 'async' : 'default',
             };
 
@@ -369,6 +385,10 @@ module.exports = function (RED) {
                   msg.allowDirect !== undefined
                     ? msg.allowDirect
                     : config.allowDirect || false,
+                allow_atomic:
+                  msg.allowAtomic !== undefined
+                    ? msg.allowAtomic
+                    : config.allowAtomic || false,
                 persist_mode:
                   msg.persistMode || config.persistMode || 'default',
                 sealed:
@@ -434,10 +454,11 @@ module.exports = function (RED) {
               streamConfig.allow_msg_schedules =
                 currentStream.config.allow_msg_schedules ||
                 streamConfig.allow_msg_schedules;
-              // allow_direct is freely toggleable (unlike the one-way
-              // allow_msg_ttl/allow_msg_schedules/sealed latches above), so
-              // it is intentionally left to the spread's normal precedence:
-              // an explicit allow_direct in msg.payload wins either way.
+              // allow_direct and allow_atomic are freely toggleable (unlike
+              // the one-way allow_msg_ttl/allow_msg_schedules/sealed
+              // latches above), so both are intentionally left to the
+              // spread's normal precedence: an explicit value in
+              // msg.payload wins either way.
               // persist_mode is neither - it is fixed at creation and the
               // server rejects any attempt to actually change it via
               // update (see ensureStreamImpl above), so a msg.payload that
@@ -555,7 +576,15 @@ module.exports = function (RED) {
                     : config.allowDirect !== undefined
                       ? config.allowDirect
                       : currentStream.config.allow_direct,
-                // Unlike allow_direct just above, persist_mode is fixed at
+                // Same freely-toggleable shape as allow_direct - confirmed
+                // against a real broker in both directions.
+                allow_atomic:
+                  msg.allowAtomic !== undefined
+                    ? msg.allowAtomic
+                    : config.allowAtomic !== undefined
+                      ? config.allowAtomic
+                      : currentStream.config.allow_atomic,
+                // Unlike allow_direct/allow_atomic just above, persist_mode is fixed at
                 // creation - the real server rejects an update that
                 // actually changes it ("stream configuration update can
                 // not change persist mode"), confirmed against a real
@@ -679,6 +708,132 @@ module.exports = function (RED) {
             break;
           }
 
+          case 'batch-publish': {
+            // Maps startBatch()/add()/commit()'s multi-call lifecycle onto
+            // ONE Node-RED message carrying the whole batch - a stateful
+            // multi-message protocol (separate 'batch-start'/'batch-add'/
+            // 'batch-commit' operations correlated by a handle) would need
+            // cross-message state tracking this plan doesn't ask for, and
+            // this API's whole point is one atomic all-or-nothing publish.
+            //
+            // Confirmed against a real broker: startBatch() and add() do
+            // NOT durably publish anything by themselves - an uncommitted
+            // batch's messages never appear on the stream. commit() is what
+            // makes the batch durable, and it ALSO publishes its own "last"
+            // message as part of committing (not a bare close call). That
+            // means the true minimum is 2 real messages - one via
+            // startBatch (first), one via commit (last) - a "batch of 1" is
+            // not representable through this API.
+            const items = msg.batch;
+            if (!Array.isArray(items) || items.length < 2) {
+              return new Error(
+                'batch-publish requires msg.batch to be an array of at least 2 items - ' +
+                  'startBatch() and commit() each publish a real message, so a 1-item batch ' +
+                  'is not representable through this API'
+              );
+            }
+            // Server limit: a batch may not contain more than 1000
+            // messages, including the start and commit messages. Checked
+            // client-side to avoid wasting a round trip on an obviously
+            // oversized array; the server would reject it anyway.
+            if (items.length > 1000) {
+              return new Error(
+                `batch-publish: msg.batch has ${items.length} items, exceeding the server's ` +
+                  '1000-message-per-batch limit (including the start and commit messages)'
+              );
+            }
+            // Only subject is required. payload is intentionally not
+            // validated - the regular (non-batch) publish path a few
+            // dozen lines below doesn't require msg.payload either
+            // (toPayload(undefined) just publishes an empty message,
+            // which is a legitimate NATS message), so an item with a
+            // subject but no payload is a valid empty-body batch item,
+            // not an error.
+            for (const item of items) {
+              if (!item || !item.subject) {
+                return new Error(
+                  'Every batch item requires a subject (msg.batch[n].subject)'
+                );
+              }
+            }
+            // Confirmed against a real broker (not just reasoned from the
+            // .d.ts): a mismatched `expect` on a middle (add()'ed) item is
+            // silently ignored - it neither throws nor is it enforced by
+            // the server, with or without `ack: true`. Letting it through
+            // would be exactly the "field that looks like it does
+            // something but doesn't" trap this whole plan exists to close,
+            // so it is rejected client-side instead, same as the last item
+            // (commit()'s options are Partial<RequestOptions> - no expect
+            // field at all, so that one really would be silently dropped
+            // by the type shape, not just practically inert).
+            const last = items[items.length - 1];
+            for (let i = 1; i < items.length; i++) {
+              if (items[i].expect) {
+                const where = i === items.length - 1 ? 'last' : 'a middle';
+                return new Error(
+                  `batch-publish: ${where} item cannot use "expect" - only the first item's ` +
+                    'expect is actually enforced by the server; expect on any later item is ' +
+                    'silently ignored (confirmed against a real broker), so it is rejected ' +
+                    'here instead of accepted and quietly doing nothing'
+                );
+              }
+            }
+
+            // Message tracing is a single connection-level switch that
+            // applies to every publish through this connection (NATS-3.4-
+            // GAP-PLAN.md decision 2) - the regular publish path a few
+            // hundred lines below applies it via a Nats-Trace-Dest header
+            // rather than a JetStreamPublishOptions field (JetStream drops
+            // unknown option keys), and batch-publish needs the exact same
+            // treatment on every item, not just the first/last.
+            const traceDestination =
+              node.serverConfig.getTraceOptions()?.traceDestination;
+            const buildItemOpts = item => {
+              const opts = {};
+              const itemHeaders = buildNatsHeaders(item.headers);
+              if (itemHeaders) opts.headers = itemHeaders;
+              if (traceDestination) {
+                if (!opts.headers) opts.headers = natsHeaders();
+                opts.headers.set('Nats-Trace-Dest', traceDestination);
+              }
+              if (item.expect) opts.expect = item.expect;
+              return opts;
+            };
+
+            const first = items[0];
+            const middle = items.slice(1, -1);
+
+            const batch = await jsClient.startBatch(
+              first.subject,
+              toPayload(first.payload),
+              buildItemOpts(first)
+            );
+            for (const item of middle) {
+              const opts = buildItemOpts(item);
+              // add()'s two overloads (fire-and-forget vs awaited-ack) both
+              // return something await-safe, so always awaiting is correct
+              // regardless of which one the ack flag selects.
+              await batch.add(
+                item.subject,
+                toPayload(item.payload),
+                item.ack ? { ...opts, ack: true } : opts
+              );
+            }
+            const lastOpts = buildItemOpts(last);
+            const batchAck = await batch.commit(
+              last.subject,
+              toPayload(last.payload),
+              lastOpts.headers ? { headers: lastOpts.headers } : undefined
+            );
+
+            msg.operation = 'batch-publish';
+            msg.payload = batchAck;
+            node.log(
+              `[STREAM PUB] Batch committed: ${batchAck.batch} (${batchAck.count} messages)`
+            );
+            break;
+          }
+
           case 'list': {
             const streams = [];
             for await (const stream of jsm.streams.list(msg.subject)) {
@@ -746,13 +901,7 @@ module.exports = function (RED) {
         const payload = toPayload(msg.payload);
 
         // Prepare headers if provided
-        let msgHeaders;
-        if (msg.headers && typeof msg.headers === 'object') {
-          msgHeaders = natsHeaders();
-          Object.keys(msg.headers).forEach(key => {
-            msgHeaders.append(key, String(msg.headers[key]));
-          });
-        }
+        const msgHeaders = buildNatsHeaders(msg.headers);
 
         // Pass native JetStreamPublishOptions through so new client options
         // don't require a new node release. Direct schedule aliases keep

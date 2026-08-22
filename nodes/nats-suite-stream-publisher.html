@@ -30,6 +30,7 @@
       allowMsgTtl: { value: false },
       allowMsgSchedules: { value: false },
       allowDirect: { value: false },
+      allowAtomic: { value: false },
       scheduleType: { value: 'none' },
       scheduleAt: {
         value: '',
@@ -158,7 +159,12 @@
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
-        } else if (op === 'info' || op === 'delete' || op === 'purge') {
+        } else if (
+          op === 'info' ||
+          op === 'delete' ||
+          op === 'purge' ||
+          op === 'batch-publish'
+        ) {
           $('#stream-configuration-section').slideDown(200);
           $('#publish-config').slideUp(200);
           $('#subject-pattern-config').slideUp(200);
@@ -307,6 +313,7 @@
             <option value="delete">Delete Stream</option>
             <option value="purge">Purge Stream</option>
             <option value="list">List Streams</option>
+            <option value="batch-publish">Batch Publish (atomic)</option>
           </select>
         </div>
       </div>
@@ -573,6 +580,13 @@
             <div class="form-tips">Enables the faster jsm.direct.getMessage() read path (used by nats-suite-stream-consumer's "Get Message" operation) instead of the always-available manager-level jsm.streams.getMessage()</div>
           </div>
           <div class="nats-form-row create-only">
+            <label>
+              <input type="checkbox" id="node-input-allowAtomic" style="width: auto; margin-right: 8px;">
+              <i class="fa fa-list-ol"></i>Allow Atomic Batch Publish
+            </label>
+            <div class="form-tips">Required for the "Batch Publish (atomic)" operation below. Can be freely enabled/disabled later, same as "Allow Direct Get" above.</div>
+          </div>
+          <div class="nats-form-row create-only">
             <label><i class="fa fa-hdd-o"></i>Persist Mode</label>
             <select id="node-input-persistMode">
               <option value="default">Default (sync to disk before ack)</option>
@@ -633,6 +647,26 @@ Removes all messages from a stream while keeping the stream itself.
 #### List Streams
 
 Lists all available streams in the JetStream server.
+
+#### Batch Publish (atomic)
+
+Publishes multiple messages to the target stream atomically, via
+`JetStreamClient.startBatch()`/`.add()`/`.commit()`. Requires "Allow Atomic
+Batch Publish" enabled on the stream.
+
+Input is `msg.batch`, an array of at least 2 items (the underlying API
+requires a start message and a commit message, each of which publishes a
+real message - a 1-item batch isn't representable): `{ subject, payload,
+headers?, expect?, ack? }`. `expect` (optimistic concurrency) is only
+supported on the first item; `ack` on a middle item makes that one
+message's `add()` call wait for a server round trip instead of firing and
+forgetting. Nothing is durably published unless the whole batch commits -
+an error partway through leaves nothing on the stream (the server abandons
+an incomplete batch after 10 seconds of inactivity). Server limits: at
+most 1000 messages per batch, at most 50 concurrent batches per stream.
+
+Output: `msg.payload` is the real `BatchAck` (`{ batch, count, stream,
+seq, duplicate }`) from the commit call.
 
 ### Inputs (Publish)
 

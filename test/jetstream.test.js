@@ -1805,3 +1805,289 @@ test(
     }
   }
 );
+
+// --- Step 8 (last bullet): JetStreamClient.startBatch() as a new
+// stream-publisher operation ("batch-publish": one atomic multi-message
+// publish driven by a single msg.batch array).
+
+test(
+  'stream-publisher: "batch-publish" lands every item atomically with the real BatchAck',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('batch-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.batch.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+    const inj = `${id}inj`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      `${prefix}.a`,
+      dbg
+    );
+    publisher.subjectPattern = `${prefix}.>`;
+    publisher.storage = 'memory';
+    publisher.allowAtomic = true;
+
+    const batch = [
+      { subject: `${prefix}.a`, payload: 'one' },
+      { subject: `${prefix}.b`, payload: 'two' },
+      { subject: `${prefix}.c`, payload: 'three' },
+      { subject: `${prefix}.d`, payload: 'four' },
+    ];
+
+    const nodes = [
+      serverNode(srv),
+      publisher,
+      injectNode(inj, spub, [
+        { p: 'operation', v: 'batch-publish', vt: 'str' },
+        { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
+      ]),
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const result = comms.waitForDebug(dbg, 10000);
+      await triggerInject(inj);
+      const ack = await result;
+
+      assert.equal(
+        ack.error,
+        undefined,
+        `batch-publish must not error, got ${JSON.stringify(ack.error)}`
+      );
+      assert.equal(ack.operation, 'batch-publish');
+      assert.equal(
+        ack.payload?.count,
+        batch.length,
+        `BatchAck.count must equal the number of items sent, got ${JSON.stringify(ack.payload)}`
+      );
+
+      const jsm = await jetstreamManager(directNc);
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.state.messages,
+        batch.length,
+        'every batch item must actually be stored on the stream, not just acked'
+      );
+
+      for (let i = 0; i < batch.length; i++) {
+        const stored = await jsm.streams.getMessage(streamName, {
+          seq: i + 1,
+        });
+        assert.ok(stored, `message at seq ${i + 1} must exist`);
+        assert.equal(stored.subject, batch[i].subject);
+        assert.equal(stored.string(), batch[i].payload);
+      }
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: "batch-publish" rejects a malformed batch before touching the connection',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('batch-bad-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.batchbad.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+    const cat = `${id}cat`;
+    const injEmpty = `${id}injempty`;
+    const injMissing = `${id}injmissing`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      `${prefix}.a`,
+      dbg
+    );
+    publisher.subjectPattern = `${prefix}.>`;
+    publisher.storage = 'memory';
+
+    const nodes = [
+      serverNode(srv),
+      publisher,
+      injectNode(injEmpty, spub, [
+        { p: 'operation', v: 'batch-publish', vt: 'str' },
+        { p: 'batch', v: '[]', vt: 'json' },
+      ]),
+      injectNode(injMissing, spub, [
+        { p: 'operation', v: 'batch-publish', vt: 'str' },
+        {
+          // Only the second item is actually invalid (no subject) - the
+          // first item (subject, no payload) is a legitimate empty-body
+          // item, not a rejection trigger on its own (payload isn't
+          // validated, matching the regular publish path's own
+          // toPayload(undefined) convention).
+          p: 'batch',
+          v: JSON.stringify([{ subject: `${prefix}.a` }, { payload: 'x' }]),
+          vt: 'json',
+        },
+      ]),
+      catchNode(cat, [spub], dbg),
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const emptyResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injEmpty);
+      const emptyErr = await emptyResult;
+      assert.ok(emptyErr.error, 'an empty batch must be rejected with a real error');
+
+      const missingResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injMissing);
+      const missingErr = await missingResult;
+      assert.ok(
+        missingErr.error,
+        'a batch item missing a required subject must be rejected with a real error'
+      );
+
+      const jsm = await jetstreamManager(directNc);
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.state.messages,
+        0,
+        'neither malformed batch must have published anything to the real stream'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: "batch-publish" is genuinely atomic - a bad expect on the first item aborts the whole batch, zero messages land',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    // Confirmed empirically against the real broker before writing this:
+    // - a mismatched `expect` on a MIDDLE item is silently ignored by both
+    //   add() and commit() (with or without `ack: true`) - the server does
+    //   not appear to cross-validate expect for non-terminal batch items in
+    //   this version, so that path cannot be used to prove atomicity.
+    // - a mismatched `expect` on the FIRST item (via startBatch()) does not
+    //   throw immediately either - startBatch() returns a real batch
+    //   handle - but commit() then reliably rejects with a real server
+    //   error ("batch didn't contain number of published messages"), and
+    //   the stream is left with zero messages: true all-or-nothing
+    //   behavior, just discovered at commit() rather than at the point of
+    //   the actual mismatch.
+    const id = uid('batch-atomic-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.batchatomic.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+    const cat = `${id}cat`;
+    const inj = `${id}inj`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      `${prefix}.a`,
+      dbg
+    );
+    publisher.subjectPattern = `${prefix}.>`;
+    publisher.storage = 'memory';
+    publisher.allowAtomic = true;
+
+    const batch = [
+      {
+        subject: `${prefix}.a`,
+        payload: 'first',
+        expect: { lastSequence: 999999 },
+      },
+      { subject: `${prefix}.b`, payload: 'middle' },
+      { subject: `${prefix}.c`, payload: 'last' },
+    ];
+
+    const nodes = [
+      serverNode(srv),
+      publisher,
+      injectNode(inj, spub, [
+        { p: 'operation', v: 'batch-publish', vt: 'str' },
+        { p: 'batch', v: JSON.stringify(batch), vt: 'json' },
+      ]),
+      catchNode(cat, [spub], dbg),
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const result = comms.waitForDebug(dbg, 10000);
+      await triggerInject(inj);
+      const failed = await result;
+
+      assert.ok(
+        failed.error,
+        `a real expect mismatch on the first item must reject the whole batch, got ${JSON.stringify(failed)}`
+      );
+
+      const jsm = await jetstreamManager(directNc);
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.state.messages,
+        0,
+        'a rejected batch must leave zero messages on the stream - not even the ones already add()ed before the failing commit'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
