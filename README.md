@@ -419,10 +419,10 @@ This section provides a comprehensive overview of NATS features and their implem
 | Delete Object | ✅ Complete | `nats-suite-object-put` | Delete objects |
 | List Objects | ✅ Complete | `nats-suite-object-get` | List bucket contents |
 | Object Metadata | ✅ Complete | `nats-suite-object-put` | Content type and NATS headers |
-| Watch | ❌ Not Implemented | - | Monitor object changes |
-| Object Links | ❌ Not Implemented | - | Create object references |
-| Bucket Links | ❌ Not Implemented | - | Cross-bucket linking |
-| Seal Bucket | ❌ Not Implemented | - | Make bucket read-only |
+| Watch | ✅ Complete | `nats-suite-object-get` | Monitor object changes (`operation: watch`), with `watchIgnoreDeletes`/`watchIncludeHistory` |
+| Object Links | ✅ Complete | `nats-suite-object-put` | `operation: link` with `targetName` (same-store) |
+| Bucket Links | ✅ Complete | `nats-suite-object-put` | `operation: link` with `targetBucket` (cross-store) |
+| Seal Bucket | ✅ Complete | `nats-suite-object-put` | `operation: seal` - irreversible, rejects further writes |
 
 #### Services API Features
 
@@ -457,7 +457,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | **Core NATS** | 15 | 1 | 2 | 83% |
 | **JetStream** | 20 | 5 | 0 | 80% |
 | **KV Store** | 16 | 0 | 0 | 100% |
-| **Object Store** | 9 | 0 | 4 | 69% |
+| **Object Store** | 13 | 0 | 0 | 100% |
 | **Services API** | 7 | 0 | 1 | 87% |
 | **Server Management** | 8 | 0 | 0 | 100% |
 
@@ -475,7 +475,6 @@ Features planned for future releases (see `NATS-3.4-GAP-PLAN.md` for the full
 list and build order):
 
 1. **Stream Mirrors / Sources / Republish / Subject Transforms** - dedicated editor fields (currently reachable only via a raw `msg.payload` override)
-2. **Object Store Watch** - Monitor object changes
 
 ---
 

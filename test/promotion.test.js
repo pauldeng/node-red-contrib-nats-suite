@@ -441,6 +441,286 @@ test('bucket creation preserves msg.storage file for Object Store and KV', async
   }
 });
 
+// Step 6 (NATS-3.4-GAP-PLAN.md): Object Store watch parity with KV watch
+// (test/kv.test.js's "kv watch mode emits an event..." test is the template
+// this follows).
+test('object-get watch mode emits an event when a put lands in the bucket', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const srv = uid('srv');
+  const bucket = uid('objwatch');
+  const watchId = uid('objwatch');
+  const debugId = uid('debug');
+  const putId = uid('put');
+  const injectId = uid('inject');
+
+  const nodes = [
+    serverNode(srv),
+    {
+      id: watchId,
+      type: 'nats-suite-object-get',
+      z: 'FLOW',
+      server: srv,
+      bucket,
+      operation: 'watch',
+      watchIgnoreDeletes: false,
+      watchIncludeHistory: false,
+      wires: [[debugId]],
+    },
+    {
+      id: debugId,
+      type: 'debug',
+      z: 'FLOW',
+      active: true,
+      tosidebar: true,
+      console: false,
+      complete: 'true',
+      wires: [],
+    },
+    {
+      id: putId,
+      type: 'nats-suite-object-put',
+      z: 'FLOW',
+      server: srv,
+      bucket,
+      operation: 'put',
+      storage: 'memory',
+      replicas: 1,
+      nameFrom: 'msg',
+      dataFrom: 'payload',
+      wires: [[]],
+    },
+    {
+      id: injectId,
+      type: 'inject',
+      z: 'FLOW',
+      props: [
+        { p: 'payload', v: 'triggered', vt: 'str' },
+        { p: 'objectName', v: 'signal.txt', vt: 'str' },
+      ],
+      repeat: '',
+      once: false,
+      payload: 'triggered',
+      payloadType: 'str',
+      wires: [[putId]],
+    },
+  ];
+
+  const comms = connectComms();
+  let flowId;
+  try {
+    await comms.ready;
+    const serverReady = comms.waitForStatus(
+      srv,
+      s => s.fill === 'green',
+      20000
+    );
+    const watching = comms.waitForStatus(
+      watchId,
+      s => s.text === 'watching',
+      20000
+    );
+
+    flowId = await deployFlow(nodes);
+    await serverReady;
+    await watching;
+
+    const watchEvent = comms.waitForDebug(debugId, 10000);
+    await triggerInject(injectId);
+    const msg = await watchEvent;
+
+    assert.equal(msg.objectName, 'signal.txt');
+    assert.equal(msg.bucket, bucket);
+    assert.equal(msg.operation, 'WATCH');
+    assert.equal(msg._watchEvent, true);
+    assert.equal(msg.deleted, false);
+  } finally {
+    await removeFlow(flowId);
+    comms.close();
+    const nc = await connectDirectNats();
+    try {
+      const os = await new Objm(nc).open(bucket);
+      await os.destroy();
+    } catch {
+      // The bucket may not exist if setup failed.
+    }
+    await closeNats(nc);
+  }
+});
+
+test('object-get watch mode: watchIgnoreDeletes suppresses delete events, disabled lets them through', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const srv = uid('srv');
+  const bucketAll = uid('objwatchall');
+  const bucketFiltered = uid('objwatchflt');
+
+  const watchAllId = uid('watchall');
+  const debugAllId = uid('debugall');
+  const putAllId = uid('putall');
+  const injectPutAllId = uid('injputall');
+  const deleteAllId = uid('delall');
+  const injectDeleteAllId = uid('injdelall');
+
+  const watchFilteredId = uid('watchflt');
+  const debugFilteredId = uid('debugflt');
+  const putFilteredId = uid('putflt');
+  const injectPutFilteredId = uid('injputflt');
+  const deleteFilteredId = uid('delflt');
+  const injectDeleteFilteredId = uid('injdelflt');
+
+  const objectPutNode = (id, server, bucket, operation) => ({
+    id,
+    type: 'nats-suite-object-put',
+    z: 'FLOW',
+    server,
+    bucket,
+    operation,
+    storage: 'memory',
+    replicas: 1,
+    nameFrom: 'msg',
+    dataFrom: 'payload',
+    wires: [[]],
+  });
+
+  const debugNode = id => ({
+    id,
+    type: 'debug',
+    z: 'FLOW',
+    active: true,
+    tosidebar: true,
+    console: false,
+    complete: 'true',
+    wires: [],
+  });
+
+  const injectNode = (id, wireTo, objectName) => ({
+    id,
+    type: 'inject',
+    z: 'FLOW',
+    props: [
+      { p: 'payload', v: 'x', vt: 'str' },
+      { p: 'objectName', v: objectName, vt: 'str' },
+    ],
+    repeat: '',
+    once: false,
+    payload: 'x',
+    payloadType: 'str',
+    wires: [[wireTo]],
+  });
+
+  const nodes = [
+    serverNode(srv),
+    {
+      id: watchAllId,
+      type: 'nats-suite-object-get',
+      z: 'FLOW',
+      server: srv,
+      bucket: bucketAll,
+      operation: 'watch',
+      watchIgnoreDeletes: false,
+      watchIncludeHistory: false,
+      wires: [[debugAllId]],
+    },
+    debugNode(debugAllId),
+    objectPutNode(putAllId, srv, bucketAll, 'put'),
+    injectNode(injectPutAllId, putAllId, 'x.txt'),
+    objectPutNode(deleteAllId, srv, bucketAll, 'delete'),
+    injectNode(injectDeleteAllId, deleteAllId, 'x.txt'),
+
+    {
+      id: watchFilteredId,
+      type: 'nats-suite-object-get',
+      z: 'FLOW',
+      server: srv,
+      bucket: bucketFiltered,
+      operation: 'watch',
+      watchIgnoreDeletes: true,
+      watchIncludeHistory: false,
+      wires: [[debugFilteredId]],
+    },
+    debugNode(debugFilteredId),
+    objectPutNode(putFilteredId, srv, bucketFiltered, 'put'),
+    injectNode(injectPutFilteredId, putFilteredId, 'y.txt'),
+    objectPutNode(deleteFilteredId, srv, bucketFiltered, 'delete'),
+    injectNode(injectDeleteFilteredId, deleteFilteredId, 'y.txt'),
+  ];
+
+  const comms = connectComms();
+  let flowId;
+  try {
+    await comms.ready;
+    const serverReady = comms.waitForStatus(
+      srv,
+      s => s.fill === 'green',
+      20000
+    );
+    const watchingAll = comms.waitForStatus(
+      watchAllId,
+      s => s.text === 'watching',
+      20000
+    );
+    const watchingFiltered = comms.waitForStatus(
+      watchFilteredId,
+      s => s.text === 'watching',
+      20000
+    );
+
+    flowId = await deployFlow(nodes);
+    await serverReady;
+    await watchingAll;
+    await watchingFiltered;
+
+    // Unfiltered watcher: both the put and the delete must arrive.
+    const putEventAll = comms.waitForDebug(debugAllId, 10000);
+    await triggerInject(injectPutAllId);
+    const putMsgAll = await putEventAll;
+    assert.equal(putMsgAll.deleted, false);
+
+    const deleteEventAll = comms.waitForDebug(debugAllId, 10000);
+    await triggerInject(injectDeleteAllId);
+    const deleteMsgAll = await deleteEventAll;
+    assert.equal(deleteMsgAll.deleted, true);
+
+    // Filtered watcher (watchIgnoreDeletes: true): the put must still
+    // arrive, but the delete must not - proven by triggering the delete and
+    // confirming no second debug event shows up within a bounded window.
+    const putEventFiltered = comms.waitForDebug(debugFilteredId, 10000);
+    await triggerInject(injectPutFilteredId);
+    const putMsgFiltered = await putEventFiltered;
+    assert.equal(putMsgFiltered.deleted, false);
+
+    const noDeleteEvent = comms.waitForDebug(debugFilteredId, 3000);
+    await triggerInject(injectDeleteFilteredId);
+    await assert.rejects(
+      noDeleteEvent,
+      /Timed out/,
+      'watchIgnoreDeletes: true must suppress the delete event entirely'
+    );
+  } finally {
+    await removeFlow(flowId);
+    comms.close();
+    const nc = await connectDirectNats();
+    for (const bucket of [bucketAll, bucketFiltered]) {
+      try {
+        const os = await new Objm(nc).open(bucket);
+        await os.destroy();
+      } catch {
+        // The bucket may not exist if setup failed.
+      }
+    }
+    await closeNats(nc);
+  }
+});
+
 async function importExample(t, filename, extraNodeIds) {
   const skipReason = await ensureStackUp();
   if (skipReason) {

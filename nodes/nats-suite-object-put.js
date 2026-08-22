@@ -35,6 +35,15 @@ module.exports = function (RED) {
     let objectStore = null;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
+    // Shared by put/delete/link - the "object name" field is resolved the
+    // same way regardless of which of those three operations is running.
+    const resolveObjectName = msg => {
+      if (config.nameFrom === 'config') return config.objectName;
+      if (config.nameFrom === 'msg') return msg.objectName || msg.name;
+      if (config.nameFrom === 'topic') return msg.topic;
+      return undefined;
+    };
+
     // ObjectInfo.headers is a MsgHdrs instance (@nats-io/nats-core), not a
     // plain object - flatten it so msg.info stays JSON-serializable.
     // ponytail: hdrs.get() returns only the last value per key, so a
@@ -163,6 +172,23 @@ module.exports = function (RED) {
             break;
           }
 
+          case 'seal': {
+            const os = await objm.create(bucketName);
+            const status = await os.seal();
+            msg.payload = {
+              operation: 'seal',
+              bucket: bucketName,
+              sealed: status.sealed,
+              size: status.size,
+            };
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `sealed: ${bucketName}`,
+            });
+            break;
+          }
+
           case 'bucket-list': {
             const statuses = [];
             for await (const status of objm.list()) {
@@ -209,9 +235,13 @@ module.exports = function (RED) {
 
     // Input handler
     node.on('input', async function (msg, send, done) {
+      // Declared here (not const-scoped inside the try) so the catch below
+      // can tag msg.operation with whatever was actually attempted, instead
+      // of a hardcoded 'PUT' that mislabeled delete/link failures too.
+      let operation = 'put';
       try {
         // Check if this is a bucket management operation
-        const operation = msg.operation || config.operation || 'put';
+        operation = msg.operation || config.operation || 'put';
 
         if (
           [
@@ -219,23 +249,77 @@ module.exports = function (RED) {
             'bucket-info',
             'bucket-delete',
             'bucket-list',
+            'seal',
           ].includes(operation)
         ) {
           done(await performBucketOperation(msg, send));
           return;
         }
 
+        // Link operation: create a new entry that references another
+        // object in the same store, or an entire other store. Not a
+        // bucket-admin op (it creates an object-store entry, same family as
+        // put/delete) so it's handled inline here rather than in
+        // performBucketOperation.
+        if (operation === 'link') {
+          const objectName = resolveObjectName(msg);
+
+          if (!objectName) {
+            node.status({ fill: 'red', shape: 'ring', text: 'no name' });
+            done(new Error('No object name specified'));
+            return;
+          }
+
+          const targetName = msg.targetName || config.targetName || '';
+          const targetBucket = msg.targetBucket || config.targetBucket || '';
+          if (!targetName === !targetBucket) {
+            done(
+              new Error(
+                'link requires exactly one of targetName (same-store link) or targetBucket (cross-store link)'
+              )
+            );
+            return;
+          }
+
+          const os = await getObjectStore();
+          let info;
+          if (targetName) {
+            const targetInfo = await os.info(targetName);
+            if (!targetInfo) {
+              done(new Error(`Link target not found: ${targetName}`));
+              return;
+            }
+            info = await os.link(objectName, targetInfo);
+          } else {
+            const nc = await node.serverConfig.getConnection();
+            const targetStore = await new Objm(nc).open(targetBucket);
+            info = await os.linkStore(objectName, targetStore);
+          }
+
+          if (isDebug) {
+            node.log(
+              `[OBJECT LINK] Linked: ${objectName} -> ${targetName || targetBucket}`
+            );
+          }
+
+          msg.info = { ...info, headers: headersToObject(info.headers) };
+          msg.operation = 'LINK';
+          msg.objectName = objectName;
+          msg.bucket = node.bucket;
+
+          send(msg);
+          node.status({
+            fill: 'green',
+            shape: 'dot',
+            text: `linked: ${objectName}`,
+          });
+          done();
+          return;
+        }
+
         // Check if this is a delete operation
         if (operation === 'delete') {
-          // Determine object name
-          let objectName;
-          if (config.nameFrom === 'config') {
-            objectName = config.objectName;
-          } else if (config.nameFrom === 'msg') {
-            objectName = msg.objectName || msg.name;
-          } else if (config.nameFrom === 'topic') {
-            objectName = msg.topic;
-          }
+          const objectName = resolveObjectName(msg);
 
           if (!objectName) {
             node.status({ fill: 'red', shape: 'ring', text: 'no name' });
@@ -266,15 +350,7 @@ module.exports = function (RED) {
         }
 
         // Default: put operation
-        // Determine object name
-        let objectName;
-        if (config.nameFrom === 'config') {
-          objectName = config.objectName;
-        } else if (config.nameFrom === 'msg') {
-          objectName = msg.objectName || msg.name;
-        } else if (config.nameFrom === 'topic') {
-          objectName = msg.topic;
-        }
+        const objectName = resolveObjectName(msg);
 
         if (!objectName) {
           node.status({ fill: 'red', shape: 'ring', text: 'no name' });
@@ -375,7 +451,11 @@ module.exports = function (RED) {
         done();
       } catch (err) {
         msg.error = err.message;
-        msg.operation = 'PUT';
+        // operation may be msg.operation, which is attacker/caller-controlled
+        // and not guaranteed to be a string - guard so a bad value doesn't
+        // throw again here and swallow the real error as an unhandled
+        // rejection.
+        msg.operation = String(operation).toUpperCase();
         send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
         done(err);

@@ -135,3 +135,125 @@ test('object store: bucket-info/bucket-list count fields (object-put.js admin op
     await cleanup(nc, bucket);
   }
 });
+
+// Step 6 of NATS-3.4-GAP-PLAN.md: link (same-store and cross-store) and seal,
+// exercised at the same @nats-io/obj call level nats-suite-object-put.js
+// itself uses (os.info/os.link/os.linkStore/os.seal), matching this file's
+// existing direct-integration style.
+test('object store: link() to another object in the same bucket resolves to the same data', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const bucket = `test_obj_link_${Date.now().toString(36)}`;
+  const nc = await connectDirectNats();
+
+  try {
+    const objm = new Objm(nc);
+    const os = await objm.create(bucket);
+
+    const payload = Buffer.from('link target payload');
+    await os.putBlob({ name: 'target.txt' }, payload);
+
+    const targetInfo = await os.info('target.txt');
+    assert.ok(targetInfo, 'os.info() should find the just-created target');
+
+    const linkInfo = await os.link('alias.txt', targetInfo);
+    assert.equal(linkInfo.name, 'alias.txt');
+
+    const got = await os.get('alias.txt');
+    assert.ok(got, 'get() on the link name should resolve');
+    const chunks = [];
+    for await (const chunk of got.data) chunks.push(chunk);
+    assert.equal(
+      Buffer.concat(chunks).toString('utf8'),
+      'link target payload',
+      'reading through the link must return the target object\'s actual data'
+    );
+
+    // "links of links are rejected" per the upstream doc comment - the
+    // node code deliberately doesn't pre-validate this, it lets the
+    // server's own rejection propagate. Confirm that's real, not assumed.
+    const linkInfoAgain = await os.info('alias.txt');
+    await assert.rejects(
+      () => os.link('alias-of-alias.txt', linkInfoAgain),
+      /is a link/i,
+      'linking to an existing link must be rejected by the real server'
+    );
+  } finally {
+    await cleanup(nc, bucket);
+  }
+});
+
+test('object store: linkStore() to an entire other bucket resolves', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const bucketA = `test_obj_linkstore_a_${Date.now().toString(36)}`;
+  const bucketB = `test_obj_linkstore_b_${Date.now().toString(36)}`;
+  const nc = await connectDirectNats();
+
+  try {
+    const objm = new Objm(nc);
+    const osA = await objm.create(bucketA);
+    const osB = await objm.create(bucketB);
+    await osB.putBlob({ name: 'inner.txt' }, Buffer.from('other bucket data'));
+
+    const otherStore = await objm.open(bucketB);
+    const linkInfo = await osA.linkStore('whole-store-link', otherStore);
+    assert.equal(linkInfo.name, 'whole-store-link');
+    assert.equal(
+      linkInfo.options?.link?.bucket,
+      bucketB,
+      'the created entry must record it links to bucketB as a whole (no per-object name)'
+    );
+    assert.equal(
+      linkInfo.options?.link?.name,
+      undefined,
+      'a whole-store link must not carry a specific object name'
+    );
+  } finally {
+    await cleanup(nc, bucketA);
+    await cleanup(nc, bucketB);
+  }
+});
+
+test('object store: seal() causes the real server to reject a subsequent put', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const bucket = `test_obj_seal_${Date.now().toString(36)}`;
+  const nc = await connectDirectNats();
+
+  try {
+    const objm = new Objm(nc);
+    const os = await objm.create(bucket);
+    await os.putBlob({ name: 'before-seal.txt' }, Buffer.from('ok'));
+
+    const status = await os.seal();
+    assert.equal(status.sealed, true, 'seal() must report the bucket as sealed');
+
+    await assert.rejects(
+      () => os.putBlob({ name: 'after-seal.txt' }, Buffer.from('rejected')),
+      /seal/i,
+      'a put against a sealed bucket must be rejected by the real server, not just locally'
+    );
+
+    const finalStatus = await os.status();
+    assert.equal(
+      finalStatus.sealed,
+      true,
+      'sealed state must persist and be readable back from the server'
+    );
+  } finally {
+    await cleanup(nc, bucket);
+  }
+});

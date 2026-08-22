@@ -31,6 +31,12 @@ module.exports = function (RED) {
     }
 
     let objectStore = null;
+    let watcher = null;
+    let watchTask = null;
+    let watchSetupTask = null;
+    let isWatching = false;
+    let statusTimer = null;
+    let closing = false;
     const isDebug = config.debug || this.serverConfig.debug || false;
 
     // ObjectInfo.headers is a MsgHdrs instance (@nats-io/nats-core), not a
@@ -74,13 +80,115 @@ module.exports = function (RED) {
       return objectStore;
     };
 
+    // Helper: Start watching the bucket for object changes. Mirrors
+    // nats-suite-kv-get.js's startWatch/stopWatch shape exactly.
+    const startWatch = async () => {
+      if (isWatching) return;
+
+      const os = await getObjectStore();
+
+      const watchOptions = {};
+      if (config.watchIgnoreDeletes) watchOptions.ignoreDeletes = true;
+      if (config.watchIncludeHistory) watchOptions.includeHistory = true;
+
+      watcher = await os.watch(watchOptions);
+      if (closing) {
+        await watcher.stop();
+        watcher = null;
+        return;
+      }
+      const activeWatcher = watcher;
+      isWatching = true;
+
+      node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+      if (isDebug)
+        node.log(`[OBJECT GET] Started watching bucket: ${node.bucket}`);
+
+      const consumeWatch = async () => {
+        try {
+          for await (const info of activeWatcher) {
+            if (!isWatching) break;
+
+            const watchMsg = {
+              operation: 'WATCH',
+              objectName: info.name,
+              bucket: node.bucket,
+              info: { ...info, headers: headersToObject(info.headers) },
+              size: info.size,
+              metadata: headersToObject(info.headers),
+              isUpdate: info.isUpdate,
+              deleted: info.deleted,
+              _watchEvent: true,
+            };
+
+            node.send(watchMsg);
+
+            node.status({
+              fill: 'blue',
+              shape: 'dot',
+              text: `${info.deleted ? 'DEL' : 'PUT'}: ${info.name}`,
+            });
+
+            if (statusTimer) clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => {
+              statusTimer = null;
+              if (isWatching) {
+                node.status({ fill: 'green', shape: 'dot', text: 'watching' });
+              }
+            }, 1000);
+          }
+        } catch (err) {
+          if (isWatching) {
+            node.error(`Watch error: ${err.message}`);
+            node.status({ fill: 'red', shape: 'ring', text: 'watch error' });
+          }
+        }
+      };
+      watchTask = consumeWatch();
+    };
+
+    // Helper: Stop watching
+    const stopWatch = async () => {
+      if (watcher) {
+        await watcher.stop();
+        await watchTask;
+        if (isDebug) node.log(`[OBJECT GET] Stopped watching`);
+        watcher = null;
+        watchTask = null;
+      }
+      isWatching = false;
+    };
+
     this.serverConfig.registerConnectionUser(node.id);
-    node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+
+    if (config.operation === 'watch') {
+      const initializeWatch = async () => {
+        try {
+          await startWatch();
+        } catch (err) {
+          node.error(`Failed to start watch: ${err.message}`);
+          node.status({ fill: 'red', shape: 'ring', text: 'watch failed' });
+        }
+      };
+      watchSetupTask = initializeWatch();
+    } else {
+      node.status({ fill: 'yellow', shape: 'ring', text: 'ready' });
+    }
 
     node.on('input', async function (msg, send, done) {
+      // Declared here (not const-scoped inside the try) so the catch below
+      // can tag msg.operation with whatever was actually attempted, instead
+      // of a hardcoded 'GET' that would mislabel watch/list failures too.
+      let operation = 'get';
       try {
-        // Check if this is a list operation
-        const operation = msg.operation || config.operation || 'get';
+        // Check if this is a list or watch operation
+        operation = msg.operation || config.operation || 'get';
+
+        if (operation === 'watch') {
+          if (!isWatching) await startWatch();
+          done();
+          return;
+        }
 
         if (operation === 'list') {
           const os = await getObjectStore();
@@ -186,16 +294,28 @@ module.exports = function (RED) {
         done();
       } catch (err) {
         msg.error = err.message;
-        msg.operation = 'GET';
+        msg.operation = operation.toUpperCase();
         send(msg);
         node.status({ fill: 'red', shape: 'ring', text: 'error' });
         done(err);
       }
     });
 
-    node.on('close', function (done) {
-      this.serverConfig.unregisterConnectionUser(node.id);
-      done();
+    node.on('close', async function (done) {
+      let closeError;
+      try {
+        closing = true;
+        if (statusTimer) clearTimeout(statusTimer);
+        if (watchSetupTask) await watchSetupTask;
+        await stopWatch();
+      } catch (err) {
+        closeError = err;
+      } finally {
+        this.serverConfig.unregisterConnectionUser(node.id);
+        objectStore = null;
+        node.status({});
+        done(closeError);
+      }
     });
   }
 

@@ -11,6 +11,8 @@
       bucketConfig: { value: "", required: false },
       objectName: { value: "" },
       nameFrom: { value: "msg" },
+      targetName: { value: "" },
+      targetBucket: { value: "" },
       dataFrom: { value: "payload" },
       filePath: { value: "" },
       contentType: { value: "" },
@@ -33,10 +35,15 @@
       // Operation handler
       $('#node-input-operation').on('change', function() {
         const op = $(this).val();
-        if (['bucket-create', 'bucket-info', 'bucket-delete', 'bucket-list'].includes(op)) {
+        if (['bucket-create', 'bucket-info', 'bucket-delete', 'bucket-list', 'seal'].includes(op)) {
           $('#object-config').slideUp(200);
         } else {
           $('#object-config').slideDown(200);
+        }
+        if (op === 'link') {
+          $('#link-target-config').slideDown(200);
+        } else {
+          $('#link-target-config').slideUp(200);
         }
       });
       
@@ -136,11 +143,25 @@
     <select id="node-input-operation" style="width:70%">
       <option value="put">Put Object</option>
       <option value="delete">Delete Object</option>
+      <option value="link">Link Object</option>
       <option value="bucket-create">Create Bucket</option>
       <option value="bucket-info">Bucket Info</option>
       <option value="bucket-delete">Delete Bucket</option>
       <option value="bucket-list">List Buckets</option>
+      <option value="seal">Seal Bucket</option>
     </select>
+  </div>
+
+  <div id="link-target-config" style="display: none;">
+    <div class="form-row">
+      <label for="node-input-targetName"><i class="fa fa-link"></i> Target Object</label>
+      <input type="text" id="node-input-targetName" placeholder="same-store target (leave empty if linking a bucket)" style="width:70%">
+    </div>
+    <div class="form-row">
+      <label for="node-input-targetBucket"><i class="fa fa-link"></i> Target Bucket</label>
+      <input type="text" id="node-input-targetBucket" placeholder="cross-store target (leave empty if linking an object)" style="width:70%">
+    </div>
+    <div class="form-row form-tips">Fill exactly one: Target Object links to another object in this same bucket; Target Bucket links to an entire other Object Store bucket. Both may be overridden by <code>msg.targetName</code> / <code>msg.targetBucket</code>.</div>
   </div>
 
   <div id="object-config">
@@ -189,4 +210,19 @@ Uploads objects to a NATS JetStream Object Store bucket.
 
 : info (object) : object info (size, chunks, etc.)
 : size (number) : object size in bytes
+
+### Link Operation
+
+Creates a new entry that references another object or bucket instead of
+storing new data. Set `targetName` (or `msg.targetName`) to link to another
+object in this same bucket, or `targetBucket` (or `msg.targetBucket`) to
+link to an entire other Object Store bucket — exactly one is required. The
+target object/bucket must already exist. Per the NATS Object Store API,
+links to other links are rejected by the server.
+
+### Seal Operation
+
+Permanently prevents further modifications to the bucket (new puts,
+deletes, and links are all rejected by the server afterward). There is no
+unseal operation in the underlying NATS API — this is irreversible.
 </script>

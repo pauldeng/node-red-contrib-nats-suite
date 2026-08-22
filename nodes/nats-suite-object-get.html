@@ -19,7 +19,9 @@
       replicas: { value: 1 },
       compression: { value: false },
       debug: { value: false },
-      operation: { value: 'get' }
+      operation: { value: 'get' },
+      watchIgnoreDeletes: { value: false },
+      watchIncludeHistory: { value: false }
     },
     inputs: 1,
     outputs: 1,
@@ -30,10 +32,16 @@
     oneditprepare: function() {
       // Operation handler
       $('#node-input-operation').on('change', function() {
-        if ($(this).val() === 'list') {
-          $('#object-config').slideUp(200);
-        } else {
+        const op = $(this).val();
+        if (op === 'get') {
           $('#object-config').slideDown(200);
+        } else {
+          $('#object-config').slideUp(200);
+        }
+        if (op === 'watch') {
+          $('#watch-config').slideDown(200);
+        } else {
+          $('#watch-config').slideUp(200);
         }
       });
       
@@ -123,7 +131,24 @@
     <select id="node-input-operation" style="width:70%">
       <option value="get">Get Object</option>
       <option value="list">List Objects</option>
+      <option value="watch">Watch Bucket</option>
     </select>
+  </div>
+
+  <div id="watch-config" style="display: none;">
+    <div class="form-row">
+      <label for="node-input-watchIgnoreDeletes"> </label>
+      <label for="node-input-watchIgnoreDeletes" style="width:70%">
+        <input type="checkbox" id="node-input-watchIgnoreDeletes" style="display:inline-block; width:22px; vertical-align:top;">Ignore Deletes
+      </label>
+    </div>
+    <div class="form-row">
+      <label for="node-input-watchIncludeHistory"> </label>
+      <label for="node-input-watchIncludeHistory" style="width:70%">
+        <input type="checkbox" id="node-input-watchIncludeHistory" style="display:inline-block; width:22px; vertical-align:top;">Include History
+      </label>
+    </div>
+    <div class="form-row form-tips">Emits one message per change (put/delete) in the bucket, for as long as this node is deployed. "Include History" replays existing objects as watch events when the watch starts.</div>
   </div>
 
   <div id="object-config">
@@ -151,11 +176,21 @@
 </script>
 
 <script type="text/markdown" data-help-name="nats-suite-object-get">
-Downloads objects from a NATS JetStream Object Store bucket.
+Downloads objects from a NATS JetStream Object Store bucket, lists its contents, or watches it for changes.
+
+### Modes
+
+ - `get` - retrieve a single object
+ - `list` - list all objects in the bucket
+ - `watch` - emit one message per put/delete in the bucket, for as long as this node stays deployed
+
+The mode can be overridden dynamically by setting `msg.operation` to `get`, `list`, or `watch`.
 
 ### Outputs
 
-: payload (buffer | string | object) : the object data, shaped by the configured output format
+: payload (buffer | string | object) : the object data, shaped by the configured output format (`get` mode only)
 : info (object) : object metadata (size, chunks, etc.)
 : size (number) : object size in bytes
+: isUpdate (boolean) : true if this watch event overwrote an existing object (`watch` mode only)
+: deleted (boolean) : true if this watch event is a deletion (`watch` mode only)
 </script>
