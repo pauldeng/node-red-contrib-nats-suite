@@ -1047,31 +1047,32 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
 
   const id = uid('teardown-');
   const subject = `test.publish.teardown.${id}`;
-  const srv = `${id}srv`;
-  const pub = `${id}pub`;
-  const inj = `${id}inj`;
-  const buildNodes = () => [
-    serverNode(srv),
-    publishNode(pub, {
-      server: srv,
-      dataformat: 'string',
-      datapointid: subject,
-    }),
-    injectNode(inj, pub, [{ p: 'payload', v: 'ping', vt: 'str' }]),
-  ];
-
   const comms = connectComms();
   try {
     await comms.ready;
     const baseline = await natsMonitorConnections();
 
     for (let i = 0; i < 3; i++) {
+      // Use fresh ids each time. Reusing ids lets comms replay the previous
+      // flow's green status before the replacement node has connected.
+      const srv = `${id}${i}srv`;
+      const pub = `${id}${i}pub`;
+      const inj = `${id}${i}inj`;
+      const nodes = [
+        serverNode(srv),
+        publishNode(pub, {
+          server: srv,
+          dataformat: 'string',
+          datapointid: subject,
+        }),
+        injectNode(inj, pub, [{ p: 'payload', v: 'ping', vt: 'str' }]),
+      ];
       const connected = comms.waitForStatus(
         pub,
         d => d.fill === 'green',
         15000
       );
-      const flowId = await deployFlow(buildNodes());
+      const flowId = await deployFlow(nodes);
       await connected;
 
       const directNc = await connectDirectNats();
