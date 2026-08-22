@@ -421,6 +421,7 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
         const directNc = await connectDirectNats();
         try {
           const delivered = subscribeOnce(directNc, pubSubject, 8000);
+          await directNc.flush();
           await triggerInject(pubInj);
           const wireValue = await delivered;
           assert.ok(

@@ -279,6 +279,7 @@ test('server-pool: set-servers + reconnectAfterSet moves a shared connection ont
       },
       () => 'not-there'
     );
+    await Promise.all([mainNc.flush(), embeddedNc.flush()]);
     await triggerInject(injPub);
     assert.equal(await baselineMain, 'hello-embedded');
     assert.equal(await baselineEmbeddedShouldTimeout, 'not-there');
@@ -301,6 +302,7 @@ test('server-pool: set-servers + reconnectAfterSet moves a shared connection ont
       },
       () => 'not-there'
     );
+    await Promise.all([mainNc.flush(), embeddedNc.flush()]);
     await triggerInject(injPub);
     assert.equal(await afterEmbedded, 'hello-embedded');
     assert.equal(await afterMainShouldTimeout, 'not-there');

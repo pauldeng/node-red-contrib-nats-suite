@@ -289,6 +289,7 @@ for (const c of dataformatCases) {
       await connected;
 
       const received = subscribeOnceMsg(directNc, subject, 8000);
+      await directNc.flush();
       await triggerInject(inj);
       const msg = await received;
 
@@ -361,6 +362,8 @@ for (const c of subjectCases) {
         c.expected === 'configured' ? topicSubject : configuredSubject;
 
       const arrived = subscribeOnce(directNc, expectedSubject, 8000);
+      const unexpected = subscribeOnce(directNc, otherSubject, 500);
+      await directNc.flush();
       await triggerInject(inj);
       assert.equal(
         await arrived,
@@ -368,11 +371,10 @@ for (const c of subjectCases) {
         `message should have been published on ${expectedSubject}`
       );
 
-      // A message can never appear on a subject nothing published to under
-      // NATS's exact-subject matching, so this rejection is a deterministic
-      // proof of "not this subject", not a merely bounded observation.
+      // The observer was active before the one publish. Its bounded timeout
+      // checks that no copy was routed to the other exact subject.
       await assert.rejects(
-        subscribeOnce(directNc, otherSubject, 500),
+        unexpected,
         /Timed out/,
         `message should NOT have been published on ${otherSubject}`
       );
@@ -436,6 +438,7 @@ test('publish: mode "request" emits the responder\'s reply with Auto-Reply ignor
     })().catch(() => {});
 
     const debugCaught = comms.waitForDebug(dbg, 8000);
+    await directNc.flush();
     await triggerInject(inj);
     const debugMsg = await debugCaught;
 
@@ -571,6 +574,7 @@ test('publish: requestTimeout with requestFallbackToPublish=false surfaces an er
     const observed = collectMessagesThroughSettle(subjectSub, 5000, 750);
     const debugCaught = comms.waitForDebug(dbg, 5000);
     const errorStatus = comms.waitForStatus(pub, d => d.fill !== 'green', 5000);
+    await directNc.flush();
     await triggerInject(inj);
     const [received, debugMsg, status] = await Promise.all([
       observed,
@@ -653,6 +657,7 @@ test('publish: requestTimeout with requestFallbackToPublish=true publishes inste
     const debugCaught = comms.waitForDebug(dbg, 5000);
     const backToGreen = comms.waitForStatus(pub, d => d.fill === 'green', 5000);
 
+    await directNc.flush();
     await triggerInject(inj);
 
     const [messages, debugMsg] = await Promise.all([
@@ -734,6 +739,7 @@ test('publish: enableHeaders sends configured + dynamic msg.headers as real NATS
     await connected;
 
     const received = subscribeOnceMsg(directNc, subject, 8000);
+    await directNc.flush();
     await triggerInject(inj);
     const msg = await received;
 
@@ -845,6 +851,7 @@ test('publish: a wired Complete node fires (done()) only after a real publish su
 
     const delivered = subscribeOnce(directNc, subject, 8000);
     const completed = comms.waitForDebug(dbg, 8000);
+    await directNc.flush();
     await triggerInject(inj);
 
     const [wirePayload, completeMsg] = await Promise.all([
@@ -908,6 +915,7 @@ test('publish: server-level enableTracing makes a plain publish() emit a real NA
 
     const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
     const delivered = subscribeOnce(directNc, subject, 8000);
+    await directNc.flush();
     await triggerInject(inj);
     const [trace, wirePayload] = await Promise.all([traceEvent, delivered]);
 
@@ -960,6 +968,7 @@ test('publish: enableTracing off (the default) never emits a trace event', async
 
     const noTrace = subscribeOnce(directNc, traceSubject, 1500);
     const delivered = subscribeOnce(directNc, subject, 8000);
+    await directNc.flush();
     await triggerInject(inj);
 
     await assert.rejects(
@@ -1021,6 +1030,7 @@ test('publish: server-level enableTracing also threads through mode "request"', 
 
     const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
     const debugCaught = comms.waitForDebug(dbg, 8000);
+    await directNc.flush();
     await triggerInject(inj);
     const [trace, debugMsg] = await Promise.all([traceEvent, debugCaught]);
 
@@ -1078,6 +1088,7 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
       const directNc = await connectDirectNats();
       try {
         const received = subscribeOnce(directNc, subject, 5000);
+        await directNc.flush();
         await triggerInject(inj);
         assert.equal(
           await received,
@@ -1174,6 +1185,7 @@ test('publish: mode "requestMany" collects every real reply within the window (s
     }
 
     const debugCaught = comms.waitForDebug(dbg, maxWait + 5000);
+    await directNc.flush();
     const start = Date.now();
     await triggerInject(inj);
     const debugMsg = await debugCaught;
@@ -1251,6 +1263,7 @@ test('publish: mode "requestMany" does not hang past the window when a subscribe
     await connected;
 
     const debugCaught = comms.waitForDebug(dbg, maxWait + 5000);
+    await directNc.flush();
     const start = Date.now();
     await triggerInject(inj);
     const debugMsg = await debugCaught;
@@ -1320,6 +1333,7 @@ test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the con
     await connected;
 
     const debugCaught = comms.waitForDebug(dbg, configuredMaxWait);
+    await directNc.flush();
     const start = Date.now();
     await triggerInject(inj);
     const debugMsg = await debugCaught;
@@ -1382,6 +1396,7 @@ test('publish: mode "requestMany" surfaces real NATS headers on each collected r
     await connected;
 
     const debugCaught = comms.waitForDebug(dbg, 6000);
+    await directNc.flush();
     await triggerInject(inj);
     const debugMsg = await debugCaught;
 

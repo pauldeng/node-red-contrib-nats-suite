@@ -821,6 +821,7 @@ test('stream-publisher: server-level enableTracing makes a JetStream publish() e
 
     const traceEvent = subscribeOnce(directNc, traceSubject, 8000);
     const published = comms.waitForDebug(dbg, 8000);
+    await directNc.flush();
     await triggerInject(inj);
     const [trace, pubAck] = await Promise.all([traceEvent, published]);
 
@@ -881,6 +882,7 @@ test('stream-publisher: enableTracing off (the default) never emits a trace even
 
     const noTrace = subscribeOnce(directNc, traceSubject, 1500);
     const published = comms.waitForDebug(dbg, 8000);
+    await directNc.flush();
     await triggerInject(inj);
 
     await assert.rejects(
