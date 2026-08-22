@@ -29,6 +29,29 @@
       allowRollupHdrs: { value: false },
       allowMsgTtl: { value: false },
       allowMsgSchedules: { value: false },
+      scheduleType: { value: 'none' },
+      scheduleAt: {
+        value: '',
+        validate: function (v) {
+          if (this.scheduleType !== 'at') return true;
+          return !isNaN(Date.parse(v));
+        },
+      },
+      scheduleCron: {
+        value: '',
+        validate: function (v) {
+          if (this.scheduleType !== 'cron') return true;
+          return v.trim().split(/\s+/).filter(Boolean).length === 6;
+        },
+      },
+      scheduleTimezone: { value: '' },
+      scheduleTarget: {
+        value: '',
+        validate: function (v) {
+          if (this.scheduleType === 'none') return true;
+          return v.trim().length > 0;
+        },
+      },
     },
     inputs: 1,
     outputs: 1,
@@ -76,6 +99,16 @@
         updateCreateOnInitVisibility();
       });
 
+      // Schedule type handler - only relevant while publishing
+      const updateScheduleVisibility = function () {
+        const type = $('#node-input-scheduleType').val();
+        $('#schedule-at-row').toggle(type === 'at');
+        $('#schedule-cron-row, #schedule-timezone-row').toggle(type === 'cron');
+        $('#schedule-target-row').toggle(type !== 'none');
+      };
+      $('#node-input-scheduleType').on('change', updateScheduleVisibility);
+      updateScheduleVisibility();
+
       // Operation handler
       $('#node-input-operation').on('change', function () {
         const op = $(this).val();
@@ -83,6 +116,7 @@
           $('#publish-config').slideDown(200);
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideDown(200);
+          $('#schedule-section').slideDown(200);
           // Show all fields for publish
           $('.create-only').show();
           // Let createOnInit checkbox control these sections
@@ -92,6 +126,7 @@
           $('#subject-pattern-config').slideDown(200);
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
+          $('#schedule-section').slideUp(200);
           $('#stream-settings-section').slideDown(200);
           $('#stream-limits-section').slideDown(200);
           $('#stream-advanced-section').slideDown(200);
@@ -102,6 +137,7 @@
           $('#subject-pattern-config').slideDown(200);
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
+          $('#schedule-section').slideUp(200);
           $('#stream-settings-section').slideDown(200);
           $('#stream-limits-section').slideDown(200);
           $('#stream-advanced-section').slideDown(200);
@@ -110,6 +146,7 @@
         } else if (op === 'list') {
           $('#stream-configuration-section').slideUp(200);
           $('#create-on-init-row').slideUp(200);
+          $('#schedule-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -119,6 +156,7 @@
           $('#subject-pattern-config').slideUp(200);
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
+          $('#schedule-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -128,6 +166,7 @@
           $('#subject-pattern-config').slideDown(200);
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
+          $('#schedule-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -294,6 +333,48 @@
           <label><i class="fa fa-filter"></i>Subject Pattern</label>
           <input type="text" id="node-input-subjectPattern" placeholder="sensor.*, data.>, orders.*">
           <div class="form-tips">Pattern for subjects captured by this stream. Use comma to separate multiple subjects</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Schedule -->
+    <div class="nats-section" id="schedule-section">
+      <div class="nats-section-header">
+        <div class="nats-section-title">
+          <i class="fa fa-clock-o"></i>
+          <span>Schedule</span>
+        </div>
+        <i class="fa fa-chevron-down nats-section-toggle"></i>
+      </div>
+      <div class="nats-section-content">
+        <div class="nats-form-row">
+          <label><i class="fa fa-calendar"></i>Schedule Type</label>
+          <select id="node-input-scheduleType">
+            <option value="none">None (publish immediately)</option>
+            <option value="at">One-time (ISO date)</option>
+            <option value="cron">Recurring (cron)</option>
+          </select>
+          <div class="form-tips">Only applies when the outgoing message doesn't already set <code>msg.schedule</code> or <code>msg.options.schedule</code> - those always win. The stream also needs "Allow Message Schedules" enabled below.</div>
+        </div>
+        <div class="nats-form-row" id="schedule-at-row">
+          <label><i class="fa fa-calendar-check-o"></i>Fire At (ISO date)</label>
+          <input type="text" id="node-input-scheduleAt" placeholder="2026-01-01T00:00:00Z">
+          <div class="form-tips">Requires nats-server &ge;2.12.0</div>
+        </div>
+        <div class="nats-form-row" id="schedule-cron-row">
+          <label><i class="fa fa-repeat"></i>Cron Expression</label>
+          <input type="text" id="node-input-scheduleCron" placeholder="0 0 5 * * *">
+          <div class="form-tips">6 fields: sec min hr dom mon dow. Requires nats-server &ge;2.14.0.</div>
+        </div>
+        <div class="nats-form-row" id="schedule-timezone-row">
+          <label><i class="fa fa-globe"></i>Timezone (optional)</label>
+          <input type="text" id="node-input-scheduleTimezone" placeholder="America/Denver">
+          <div class="form-tips">IANA name. Empty uses the server default (UTC). Requires nats-server &ge;2.14.0.</div>
+        </div>
+        <div class="nats-form-row" id="schedule-target-row">
+          <label><i class="fa fa-paper-plane"></i>Delivery Target Subject</label>
+          <input type="text" id="node-input-scheduleTarget" placeholder="orders.processed">
+          <div class="form-tips">Subject the scheduled message is delivered to.</div>
         </div>
       </div>
     </div>
@@ -471,6 +552,8 @@ Publishes messages to a JetStream stream with persistence and acknowledgment.
 
 **Create Stream on initialization**: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.
 
+**Schedule** (Publish mode only): configure a one-time (ISO date) or recurring (cron) delayed delivery without hand-building `msg.schedule`. Requires the stream's "Allow Message Schedules" option. Cron, `every`, `predefined`, and `timezone` need nats-server &ge;2.14.0; one-time `at` scheduling needs &ge;2.12.0 - an older server rejects the publish with a real error rather than silently ignoring the schedule. A message that already sets `msg.schedule` or `msg.options.schedule` always overrides these fields.
+
 #### Create Stream
 
 Creates a new JetStream stream with the configured settings. The node will display **"stream {name} created"** for 2 seconds upon successful creation, then return to showing the connection state.
@@ -602,6 +685,10 @@ return msg;
 ```
 
 #### Schedule a Message
+
+The Schedule section's editor fields cover one-time and cron scheduling without a Function node - set **Schedule Type** to "One-time (ISO date)" or "Recurring (cron)", fill in **Fire At**/**Cron Expression** and **Delivery Target Subject**, and every publish through this node is scheduled automatically.
+
+For anything the editor fields don't cover (`every`, `predefined`, `rollup`, `source`, `ttl`, or a schedule decided at runtime), set `msg.schedule` directly - it always overrides the editor fields:
 
 ```
 msg.subject = "schedules.orders." + msg._msgid;

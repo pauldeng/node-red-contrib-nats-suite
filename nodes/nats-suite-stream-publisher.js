@@ -66,6 +66,34 @@ module.exports = function (RED) {
       jsm = await jetstreamManager(nc);
     };
 
+    // Helper: Build a ScheduleOptions fallback from the node's Schedule
+    // config fields. Only used when nothing message-level already set a
+    // schedule (see the input handler) - editor fields are a convenience on
+    // top of the msg.schedule passthrough, not a replacement for it. Missing
+    // scheduleTarget produces no schedule (the editor's own validate()
+    // already requires it whenever scheduleType !== 'none'; a hand-edited or
+    // imported flow that skipped that check gets a node.warn() at the call
+    // site instead of silently publishing unscheduled).
+    const buildConfigSchedule = () => {
+      if (!config.scheduleTarget) return undefined;
+      if (config.scheduleType === 'at') {
+        return {
+          specification: { at: config.scheduleAt },
+          target: config.scheduleTarget,
+        };
+      }
+      if (config.scheduleType === 'cron') {
+        return {
+          specification: { cron: config.scheduleCron },
+          target: config.scheduleTarget,
+          ...(config.scheduleTimezone
+            ? { timezone: config.scheduleTimezone }
+            : {}),
+        };
+      }
+      return undefined;
+    };
+
     // Helper: Parse subject patterns (comma-separated or array)
     const parseSubjects = subjects => {
       if (!subjects) return ['*'];
@@ -667,6 +695,15 @@ module.exports = function (RED) {
         const publishOptions = { ...msg.options };
         if (msgHeaders) publishOptions.headers = msgHeaders;
         if (msg._msgID !== undefined) publishOptions.msgID = msg._msgID;
+        if (publishOptions.schedule === undefined) {
+          if (config.scheduleType !== 'none' && !config.scheduleTarget) {
+            node.warn(
+              'Schedule Type is set but Delivery Target Subject is empty - publishing immediately without a schedule'
+            );
+          }
+          const configSchedule = buildConfigSchedule();
+          if (configSchedule) publishOptions.schedule = configSchedule;
+        }
         if (msg.schedule !== undefined) publishOptions.schedule = msg.schedule;
 
         // @nats-io/jetstream's JetStreamPublishOptions has no

@@ -450,6 +450,349 @@ test(
   }
 );
 
+// --- Step 4 (NATS-3.4-GAP-PLAN.md): cron scheduling. The one-shot `{ at }`
+// form above already proved the passthrough works; these prove the
+// recurring `{ cron }` form actually fires repeatedly server-side (not just
+// once), and that the new config-level default schedule fields never
+// override an explicit msg.schedule.
+
+test(
+  'stream-publisher: recurring cron schedule delivers repeatedly on the expected cadence',
+  { timeout: 25000 },
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('cron-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.cron.${id}`;
+    const cronSubject = `${prefix}.schedule.recurring`;
+    const targetSubject = `${prefix}.target`;
+    const srv = `${id}srv`;
+    const fn = `${id}fn`;
+    const spub = `${id}spub`;
+    const inj = `${id}inj`;
+    const dbg = `${id}dbg`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      cronSubject,
+      dbg
+    );
+    publisher.subjectPattern = [`${prefix}.schedule.>`, targetSubject].join(
+      ','
+    );
+    publisher.storage = 'memory';
+    publisher.allowMsgSchedules = true;
+
+    const nodes = [
+      serverNode(srv),
+      injectNode(inj, fn, [{ p: 'payload', v: 'tick', vt: 'str' }]),
+      functionNode(
+        fn,
+        `msg.subject = ${JSON.stringify(cronSubject)};
+         msg.schedule = {
+           specification: { cron: '*/2 * * * * *' },
+           target: ${JSON.stringify(targetSubject)}
+         };
+         return msg;`,
+        spub
+      ),
+      publisher,
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      const jsm = await jetstreamManager(directNc);
+      await jsm.streams.add({
+        name: streamName,
+        subjects: publisher.subjectPattern.split(','),
+        storage: 'memory',
+      });
+
+      await comms.ready;
+      const ready = comms.waitForStatus(
+        spub,
+        status => status.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await ready;
+
+      await jsm.consumers.add(streamName, {
+        durable_name: 'cron-delivery',
+        filter_subject: targetSubject,
+        ack_policy: AckPolicy.Explicit,
+      });
+
+      const published = comms.waitForDebug(dbg, 10000);
+      await triggerInject(inj);
+      const pubAck = await published;
+      assert.equal(pubAck.published, true);
+
+      const js = jetstream(directNc);
+      const consumer = await js.consumers.get(streamName, 'cron-delivery');
+
+      // Bounded absolute deadline, not a sleep loop: keep pulling until 2
+      // deliveries land or the window closes.
+      const deliveries = [];
+      const deadline = Date.now() + 12000;
+      while (deliveries.length < 2 && Date.now() < deadline) {
+        const delivered = await consumer.next({ expires: 3000 });
+        if (!delivered) continue;
+        deliveries.push(Date.now());
+        assert.equal(delivered.string(), 'tick');
+        assert.equal(delivered.subject, targetSubject);
+        delivered.ack();
+      }
+
+      assert.ok(
+        deliveries.length >= 2,
+        `expected at least 2 recurring deliveries within the bounded window, got ${deliveries.length}`
+      );
+      const gap = deliveries[1] - deliveries[0];
+      assert.ok(
+        gap > 500 && gap < 6000,
+        `delivery gap ${gap}ms should be roughly the 2s cron cadence, not e.g. instant or absent`
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: explicit msg.schedule overrides the config-level default schedule',
+  { timeout: 20000 },
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('schedule-override-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.scheduleOverride.${id}`;
+    const subject = `${prefix}.in`;
+    const configTarget = `${prefix}.config-target`;
+    const realTarget = `${prefix}.real-target`;
+    const srv = `${id}srv`;
+    const fn = `${id}fn`;
+    const spub = `${id}spub`;
+    const inj = `${id}inj`;
+    const dbg = `${id}dbg`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      subject,
+      dbg
+    );
+    publisher.subjectPattern = [subject, configTarget, realTarget].join(',');
+    publisher.storage = 'memory';
+    publisher.allowMsgSchedules = true;
+    // A config-level default that must NOT fire during this test - the
+    // message-level msg.schedule below targets a different subject and,
+    // per this file's existing precedence convention (top-level msg.*
+    // shorthand always wins over a config/connection-level default), must
+    // be the one that actually delivers.
+    publisher.scheduleType = 'cron';
+    publisher.scheduleCron = '0 0 1 1 *'; // once a year - inert for this test
+    publisher.scheduleTarget = configTarget;
+
+    const nodes = [
+      serverNode(srv),
+      injectNode(inj, fn, [{ p: 'payload', v: 'override-wins', vt: 'str' }]),
+      functionNode(
+        fn,
+        `msg.subject = ${JSON.stringify(subject)};
+         msg.schedule = {
+           specification: { at: new Date(Date.now() + 1000).toISOString() },
+           target: ${JSON.stringify(realTarget)}
+         };
+         return msg;`,
+        spub
+      ),
+      publisher,
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      const jsm = await jetstreamManager(directNc);
+      await jsm.streams.add({
+        name: streamName,
+        subjects: publisher.subjectPattern.split(','),
+        storage: 'memory',
+      });
+
+      await comms.ready;
+      const ready = comms.waitForStatus(
+        spub,
+        status => status.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await ready;
+
+      await jsm.consumers.add(streamName, {
+        durable_name: 'real-target-delivery',
+        filter_subject: realTarget,
+        ack_policy: AckPolicy.Explicit,
+      });
+      await jsm.consumers.add(streamName, {
+        durable_name: 'config-target-delivery',
+        filter_subject: configTarget,
+        ack_policy: AckPolicy.Explicit,
+      });
+
+      const published = comms.waitForDebug(dbg, 10000);
+      await triggerInject(inj);
+      const pubAck = await published;
+      assert.equal(pubAck.published, true);
+
+      const js = jetstream(directNc);
+      const realConsumer = await js.consumers.get(
+        streamName,
+        'real-target-delivery'
+      );
+      const delivered = await realConsumer.next({ expires: 15000 });
+      assert.ok(
+        delivered,
+        'the message-level msg.schedule must win over the config-level default'
+      );
+      assert.equal(delivered.string(), 'override-wins');
+      assert.equal(delivered.subject, realTarget);
+      delivered.ack();
+
+      const configConsumer = await js.consumers.get(
+        streamName,
+        'config-target-delivery'
+      );
+      const configDelivered = await configConsumer.next({ expires: 4000 });
+      assert.equal(
+        configDelivered,
+        null,
+        'the config-level default schedule (yearly cron) must never have fired'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+// The two tests above only ever exercise buildConfigSchedule() as dead code:
+// the cadence test drives everything through msg.schedule and never sets
+// scheduleType/scheduleCron/scheduleTarget at all, and the override test sets
+// them but its built object is immediately replaced by msg.schedule before
+// publish - it proves msg.schedule wins, not that the config-only path can
+// ever deliver anything. This proves the actual editor-fields convenience
+// path (no msg.schedule at all) really reaches NATS.
+test(
+  'stream-publisher: config-level schedule fields alone deliver via buildConfigSchedule',
+  { timeout: 20000 },
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('config-schedule-');
+    const streamName = `STREAM_${id}`;
+    const prefix = `test.jetstream.configSchedule.${id}`;
+    const subject = `${prefix}.in`;
+    const targetSubject = `${prefix}.target`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const inj = `${id}inj`;
+    const dbg = `${id}dbg`;
+
+    const publisher = streamPublisherNode(
+      spub,
+      srv,
+      streamName,
+      subject,
+      dbg
+    );
+    publisher.subjectPattern = [subject, targetSubject].join(',');
+    publisher.storage = 'memory';
+    publisher.allowMsgSchedules = true;
+    // No msg.schedule anywhere in this flow - delivery can only happen if
+    // buildConfigSchedule() reads these three fields and wires them into
+    // publishOptions.schedule itself.
+    publisher.scheduleType = 'at';
+    publisher.scheduleAt = new Date(Date.now() + 1000).toISOString();
+    publisher.scheduleTarget = targetSubject;
+
+    const nodes = [
+      serverNode(srv),
+      injectNode(inj, spub, [
+        { p: 'payload', v: 'config-scheduled', vt: 'str' },
+      ]),
+      publisher,
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      const jsm = await jetstreamManager(directNc);
+      await jsm.streams.add({
+        name: streamName,
+        subjects: publisher.subjectPattern.split(','),
+        storage: 'memory',
+      });
+
+      await comms.ready;
+      const ready = comms.waitForStatus(
+        spub,
+        status => status.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await ready;
+
+      await jsm.consumers.add(streamName, {
+        durable_name: 'config-schedule-delivery',
+        filter_subject: targetSubject,
+        ack_policy: AckPolicy.Explicit,
+      });
+
+      const published = comms.waitForDebug(dbg, 10000);
+      await triggerInject(inj);
+      const pubAck = await published;
+      assert.equal(pubAck.published, true);
+
+      const js = jetstream(directNc);
+      const consumer = await js.consumers.get(
+        streamName,
+        'config-schedule-delivery'
+      );
+      const delivered = await consumer.next({ expires: 15000 });
+      assert.ok(
+        delivered,
+        'buildConfigSchedule() must have produced a schedule NATS actually delivered'
+      );
+      assert.equal(delivered.string(), 'config-scheduled');
+      assert.equal(delivered.subject, targetSubject);
+      delivered.ack();
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
 // --- Message tracing (Step 2): connection-level switch only (no per-message
 // override - NATS-3.4-GAP-PLAN.md decision 2). JetStreamPublishOptions has no
 // traceDestination field and @nats-io/jetstream's publish() silently drops

@@ -377,6 +377,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Retention: WorkQueue | ✅ Complete | `nats-suite-stream-publisher` | Work queue semantics |
 | Message Replay | ✅ Complete | `nats-suite-stream-consumer` | Replay from sequence/time |
 | Deduplication | ✅ Complete | `nats-suite-stream-publisher` | Via message ID |
+| Message Scheduling | ✅ Complete | `nats-suite-stream-publisher` | Editor fields for one-time (ISO date, nats-server ≥2.12.0) and recurring (cron, ≥2.14.0) delayed delivery; `every`/`predefined`/`rollup`/`source` reachable via `msg.schedule` passthrough, which always overrides the editor fields |
 | Stream Mirrors | 🔄 Partial | `nats-suite-stream-publisher` | No dedicated editor fields yet; reachable today via a native `msg.payload` config override on create/update |
 | Stream Sources | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Stream Republish | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
