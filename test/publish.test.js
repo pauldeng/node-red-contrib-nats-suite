@@ -11,6 +11,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { headers: natsHeaders } = require('@nats-io/nats-core');
 const {
   ensureStackUp,
   deployFlow,
@@ -899,5 +900,291 @@ test('publish: redeploying the flow repeatedly does not grow NATS connection cou
     );
   } finally {
     comms.close();
+  }
+});
+
+// --- mode "requestMany" (scatter-gather) ---------------------------------
+//
+// Empirically confirmed against the real broker before writing these
+// (@nats-io/nats-core 3.4.0, nats-server 2.14.5):
+//   - strategy "timer" always waits out the full maxWait, regardless of how
+//     fast replies arrive - it is not a "stop early once done" strategy.
+//   - maxMessages has no effect on strategy "timer" (setting it to 1 still
+//     collected every reply and still waited the full window) - it only
+//     bounds strategy "count".
+//   - strategy "stall" stops early once `stall` ms pass with no new reply,
+//     bounded above by maxWait.
+//   - when a subject has zero subscriber interest, requestMany() itself
+//     REJECTS synchronously with a NoResponders error - a different failure
+//     mode from "subscribers exist but none replied", which instead
+//     completes normally with 0 replies once maxWait elapses. The real
+//     nats-suite-publish.js implementation catches the reject case and
+//     surfaces it via done(err); the exists-but-silent case is a normal
+//     success with replyCount: 0.
+
+function respondOnce(nc, subject, payload) {
+  const sub = nc.subscribe(subject);
+  (async () => {
+    for await (const m of sub) {
+      m.respond(new TextEncoder().encode(payload));
+      break;
+    }
+  })().catch(() => {});
+  return sub;
+}
+
+test('publish: mode "requestMany" collects every real reply within the window (strategy "timer" waits out the full maxWait)', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('rm-ok-');
+  const subject = `test.publish.requestMany.${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+  const maxWait = 1800;
+
+  const nodes = [
+    serverNode(srv),
+    publishNode(pub, {
+      server: srv,
+      mode: 'requestMany',
+      datapointid: subject,
+      requestManyStrategy: 'timer',
+      requestManyMaxWait: maxWait,
+      requestManyMaxMessages: 0,
+      outputs: 1,
+      wires: [[dbg]],
+    }),
+    injectNode(inj, pub, [{ p: 'payload', v: 'scatter', vt: 'str' }]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  const subs = [];
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    for (let i = 0; i < 3; i++) {
+      subs.push(respondOnce(directNc, subject, `responder-${i}`));
+    }
+
+    const debugCaught = comms.waitForDebug(dbg, maxWait + 5000);
+    const start = Date.now();
+    await triggerInject(inj);
+    const debugMsg = await debugCaught;
+    const elapsed = Date.now() - start;
+
+    assert.equal(debugMsg.replyCount, 3);
+    assert.deepEqual(
+      [...debugMsg.payload].sort(),
+      ['responder-0', 'responder-1', 'responder-2']
+    );
+    assert.ok(Array.isArray(debugMsg.replies) && debugMsg.replies.length === 3);
+    // "timer" strategy: confirmed empirically to always wait out the full
+    // window even when every reply lands almost instantly - assert that,
+    // not "returns quickly".
+    assert.ok(
+      elapsed >= maxWait - 200,
+      `"timer" strategy should wait out the full ${maxWait}ms window; only took ${elapsed}ms`
+    );
+    assert.ok(
+      elapsed < maxWait + 3000,
+      `"timer" strategy should not run far past its ${maxWait}ms window; took ${elapsed}ms`
+    );
+  } finally {
+    subs.forEach((s) => s.unsubscribe());
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: mode "requestMany" does not hang past the window when a subscriber never replies', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('rm-silent-');
+  const subject = `test.publish.requestMany.${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+  const maxWait = 1500;
+
+  const nodes = [
+    serverNode(srv),
+    publishNode(pub, {
+      server: srv,
+      mode: 'requestMany',
+      datapointid: subject,
+      requestManyStrategy: 'timer',
+      requestManyMaxWait: maxWait,
+      outputs: 1,
+      wires: [[dbg]],
+    }),
+    injectNode(inj, pub, [{ p: 'payload', v: 'scatter', vt: 'str' }]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  // Interest exists (so requestMany() itself does not reject with
+  // NoResponders) but nobody ever calls respond() - the window must still
+  // bound the wait and the node must still complete, with a partial result.
+  const silentSub = directNc.subscribe(subject);
+  (async () => { for await (const m of silentSub) { void m; /* never respond */ } })().catch(() => {});
+  const repliers = [respondOnce(directNc, subject, 'the-one-that-replies')];
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const debugCaught = comms.waitForDebug(dbg, maxWait + 5000);
+    const start = Date.now();
+    await triggerInject(inj);
+    const debugMsg = await debugCaught;
+    const elapsed = Date.now() - start;
+
+    assert.equal(debugMsg.replyCount, 1);
+    assert.deepEqual([...debugMsg.payload], ['the-one-that-replies']);
+    assert.equal(debugMsg.error, undefined);
+    assert.ok(
+      elapsed < maxWait + 3000,
+      `a silent subscriber must not hang the node past the ${maxWait}ms window; took ${elapsed}ms`
+    );
+  } finally {
+    silentSub.unsubscribe();
+    repliers.forEach((s) => s.unsubscribe());
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: mode "requestMany" msg-level requestManyMaxWait overrides the configured default', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('rm-override-');
+  const subject = `test.publish.requestMany.${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+  const configuredMaxWait = 8000;
+  const overrideMaxWait = 700;
+
+  const nodes = [
+    serverNode(srv),
+    publishNode(pub, {
+      server: srv,
+      mode: 'requestMany',
+      datapointid: subject,
+      requestManyStrategy: 'timer',
+      requestManyMaxWait: configuredMaxWait,
+      outputs: 1,
+      wires: [[dbg]],
+    }),
+    injectNode(inj, pub, [
+      { p: 'payload', v: 'scatter', vt: 'str' },
+      { p: 'requestManyMaxWait', v: String(overrideMaxWait), vt: 'num' },
+    ]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  // Interest only (no reply) - if the msg-level override were ignored, this
+  // test would take ~8s (the config default) instead of ~0.7s.
+  const silentSub = directNc.subscribe(subject);
+  (async () => { for await (const m of silentSub) { void m; /* never respond */ } })().catch(() => {});
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const debugCaught = comms.waitForDebug(dbg, configuredMaxWait);
+    const start = Date.now();
+    await triggerInject(inj);
+    const debugMsg = await debugCaught;
+    const elapsed = Date.now() - start;
+
+    assert.equal(debugMsg.replyCount, 0);
+    assert.ok(
+      elapsed < overrideMaxWait + 3000,
+      `msg.requestManyMaxWait (${overrideMaxWait}ms) should win over the configured ${configuredMaxWait}ms default; took ${elapsed}ms`
+    );
+  } finally {
+    silentSub.unsubscribe();
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
+  }
+});
+
+test('publish: mode "requestMany" surfaces real NATS headers on each collected reply', async (t) => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('rm-headers-');
+  const subject = `test.publish.requestMany.${id}`;
+  const srv = `${id}srv`;
+  const pub = `${id}pub`;
+  const inj = `${id}inj`;
+  const dbg = `${id}dbg`;
+
+  const nodes = [
+    serverNode(srv),
+    publishNode(pub, {
+      server: srv,
+      mode: 'requestMany',
+      datapointid: subject,
+      requestManyStrategy: 'timer',
+      requestManyMaxWait: 1200,
+      outputs: 1,
+      wires: [[dbg]],
+    }),
+    injectNode(inj, pub, [{ p: 'payload', v: 'scatter', vt: 'str' }]),
+    debugNode(dbg),
+  ];
+
+  const comms = connectComms();
+  const directNc = await connectDirectNats();
+  const sub = directNc.subscribe(subject);
+  (async () => {
+    for await (const m of sub) {
+      const h = natsHeaders();
+      h.set('X-Responder-Id', 'only-one');
+      m.respond(new TextEncoder().encode('with-headers'), { headers: h });
+      break;
+    }
+  })().catch(() => {});
+  let flowId;
+  try {
+    await comms.ready;
+    const connected = comms.waitForStatus(pub, (d) => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await connected;
+
+    const debugCaught = comms.waitForDebug(dbg, 6000);
+    await triggerInject(inj);
+    const debugMsg = await debugCaught;
+
+    assert.equal(debugMsg.replyCount, 1);
+    assert.ok(Array.isArray(debugMsg.replies) && debugMsg.replies.length === 1);
+    assert.equal(debugMsg.replies[0].payload, 'with-headers');
+    assert.equal(debugMsg.replies[0].headers?.['X-Responder-Id'], 'only-one');
+  } finally {
+    sub.unsubscribe();
+    if (flowId) await deleteFlow(flowId).catch(() => {});
+    comms.close();
+    await directNc.close().catch(() => {});
   }
 });

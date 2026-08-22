@@ -231,12 +231,147 @@ module.exports = function (RED) {
       }
     }
 
+    // Scatter-gather (client side): send one request, collect every reply
+    // that arrives within the configured window into a single batch. Unlike
+    // handleRequest() above, this never falls back to a plain publish - a
+    // window that collects zero replies is a valid (if unusual) result, not
+    // a failure needing a fallback.
+    async function handleRequestMany(msg, send) {
+      if (node.config.connectionStatus !== 'connected') {
+        msg.error = {
+          message: 'Cannot send request - NATS server is not connected',
+          code: 'NOT_CONNECTED',
+        };
+        send(msg);
+        return msg.error;
+      }
+
+      const subject = resolveSubject(msg);
+      if (!subject) {
+        msg.error = {
+          message:
+            'No subject specified. Set subject in node config' +
+            (enableTopicOverride ? ' or provide msg.topic' : ''),
+          code: 'NO_SUBJECT',
+        };
+        send(msg);
+        return msg.error;
+      }
+
+      const strategy =
+        msg.requestManyStrategy || config.requestManyStrategy || 'timer';
+      const maxWait =
+        parseInt(msg.requestManyMaxWait, 10) ||
+        parseInt(config.requestManyMaxWait, 10) ||
+        2000;
+      if (!(maxWait > 0)) {
+        msg.error = {
+          message: `Invalid Request Many max wait: ${maxWait}`,
+          code: 'INVALID_MAX_WAIT',
+        };
+        send(msg);
+        return msg.error;
+      }
+
+      const requestManyOpts = { strategy, maxWait, ...node.config.getTraceOptions() };
+
+      // Verified against a real broker: maxMessages is only honored by the
+      // 'count' strategy - 'timer'/'stall'/'sentinel' silently ignore it and
+      // run their own stop condition to completion regardless of its value.
+      // Only send it where it does something.
+      if (strategy === 'count') {
+        const maxMessagesRaw =
+          msg.requestManyMaxMessages !== undefined
+            ? msg.requestManyMaxMessages
+            : config.requestManyMaxMessages;
+        const maxMessages = parseInt(maxMessagesRaw, 10);
+        if (maxMessages > 0) requestManyOpts.maxMessages = maxMessages;
+      }
+
+      if (strategy === 'stall') {
+        const stallRaw =
+          msg.requestManyStall !== undefined
+            ? msg.requestManyStall
+            : config.requestManyStall;
+        const stall = parseInt(stallRaw, 10);
+        if (stall > 0) requestManyOpts.stall = stall;
+      }
+
+      const natsnc = await node.config.getConnection();
+      const requestPayload =
+        typeof msg.payload === 'object'
+          ? JSON.stringify(msg.payload)
+          : String(msg.payload);
+      const startTime = Date.now();
+
+      node.status({
+        fill: 'blue',
+        shape: 'ring',
+        text: `requestMany: ${subject}`,
+      });
+
+      try {
+        const iter = await natsnc.requestMany(
+          subject,
+          requestPayload,
+          requestManyOpts
+        );
+        const replies = [];
+        for await (const m of iter) {
+          let replyPayload;
+          try {
+            replyPayload = m.json();
+          } catch {
+            replyPayload = m.string();
+          }
+          let replyHeaders;
+          if (m.headers) {
+            replyHeaders = {};
+            for (const [key, values] of m.headers) {
+              replyHeaders[key] = values.length === 1 ? values[0] : values;
+            }
+          }
+          replies.push({ payload: replyPayload, headers: replyHeaders, subject: m.subject });
+        }
+        const elapsed = Date.now() - startTime;
+        msg.payload = replies.map(r => r.payload);
+        msg.replies = replies;
+        msg.replyCount = replies.length;
+        delete msg.error;
+        node.status({
+          fill: 'green',
+          shape: 'dot',
+          text: `${replies.length} replies (${elapsed}ms)`,
+        });
+        restoreStatusSoon();
+        send(msg);
+        return null;
+      } catch (requestManyErr) {
+        msg.error = {
+          message: requestManyErr.message || 'Request Many failed',
+          code: requestManyErr.code || 'REQUEST_MANY_FAILED',
+        };
+        node.status({ fill: 'red', shape: 'ring', text: 'requestMany failed' });
+        restoreStatusSoon();
+        send(msg);
+        return msg.error;
+      }
+    }
+
     node.on('input', async function (msg, send, done) {
       try {
         // Request-Reply mode: full round trip handled separately, then stop
         if (mode === 'request' && !msg._requestReplyProcessed) {
           msg._requestReplyProcessed = true;
           const err = await handleRequest(msg, send);
+          done(err);
+          return;
+        }
+
+        // Scatter-gather mode: collect every reply within the window, then stop
+        if (mode === 'requestMany' && !msg._requestManyProcessed) {
+          msg._requestManyProcessed = true;
+          const err = await handleRequestMany(msg, send);
           done(err);
           return;
         }

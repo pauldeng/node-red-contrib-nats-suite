@@ -6,7 +6,7 @@
       name: { value: '' },
       server: { value: '', type: 'nats-suite-server' },
       debug: { value: false },
-      mode: { value: 'publish' }, // 'publish', 'reply', 'request'
+      mode: { value: 'publish' }, // 'publish', 'reply', 'request', 'requestMany'
       dataformat: { value: 'json', required: true },
       datapointid: { value: '' },
       enableTopicOverride: { value: false },
@@ -14,7 +14,11 @@
       requestFallbackToPublish: { value: true },
       enableAutoReply: { value: false },
       enableHeaders: { value: false },
-      headers: { value: '' }
+      headers: { value: '' },
+      requestManyStrategy: { value: 'timer' }, // 'timer', 'count', 'stall', 'sentinel'
+      requestManyMaxWait: { value: 2000 },
+      requestManyMaxMessages: { value: 0 },
+      requestManyStall: { value: 200 }
     },
     inputs: 1,
     outputs: 0,
@@ -47,13 +51,20 @@
 
       const updateOutputs = () => {
         const mode = $('#node-input-mode').val();
-        this.outputs = (mode === 'request' ||
+        this.outputs = (mode === 'request' || mode === 'requestMany' ||
           (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
       };
 
       const updateAutoReply = mode => {
         $('#node-input-enableAutoReply').prop('disabled', mode !== 'reply');
       };
+
+      const updateRequestManyVisibility = () => {
+        const strategy = $('#node-input-requestManyStrategy').val();
+        $('#request-many-maxmessages-row').toggle(strategy === 'count');
+        $('#request-many-stall-row').toggle(strategy === 'stall');
+      };
+      $('#node-input-requestManyStrategy').on('change', updateRequestManyVisibility);
 
       // Mode configuration - affects outputs and visibility
       $('#node-input-mode').on('change', function() {
@@ -64,6 +75,14 @@
           $('#requestreply-options').slideDown(200);
         } else {
           $('#requestreply-options').slideUp(200);
+        }
+
+        // Show/hide scatter-gather options
+        if (mode === 'requestMany') {
+          $('#request-many-options').slideDown(200);
+          updateRequestManyVisibility();
+        } else {
+          $('#request-many-options').slideUp(200);
         }
 
         // Show/hide subject field and topic override (hidden in reply mode as it comes from msg._reply)
@@ -84,12 +103,13 @@
       $('#node-input-mode').trigger('change');
       $('#node-input-enableHeaders').trigger('change');
       $('#node-input-enableAutoReply').trigger('change');
+      updateRequestManyVisibility();
     },
 
     oneditsave: function() {
       const mode = $('#node-input-mode').val();
-      
-      this.outputs = (mode === 'request' ||
+
+      this.outputs = (mode === 'request' || mode === 'requestMany' ||
         (mode === 'reply' && $('#node-input-enableAutoReply').is(':checked'))) ? 1 : 0;
     }
   });
@@ -335,6 +355,7 @@
             <option value="publish">Publish</option>
             <option value="reply">Reply</option>
             <option value="request">Request</option>
+            <option value="requestMany">Request Many (scatter-gather)</option>
           </select>
         </div>
 
@@ -373,6 +394,49 @@
           <div class="nats-checkbox-row">
             <input type="checkbox" id="node-input-requestFallbackToPublish">
             <label for="node-input-requestFallbackToPublish"><i class="fa fa-mail-forward"></i>Send as publish on timeout</label>
+          </div>
+        </div>
+
+        <!-- Scatter-gather options (shown when mode is 'requestMany') -->
+        <div id="request-many-options" class="nats-options">
+          <div class="nats-form-row">
+            <label><i class="fa fa-sitemap"></i>Collection Strategy</label>
+            <select id="node-input-requestManyStrategy">
+              <option value="timer">Timer - collect until max wait elapses</option>
+              <option value="count">Count - stop early once max messages arrives</option>
+              <option value="stall">Stall - stop early once replies go quiet</option>
+              <option value="sentinel">Sentinel - stop on an empty reply</option>
+            </select>
+          </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-hourglass-half"></i>Max Wait</label>
+            <div class="nats-inline-row">
+              <input type="number" id="node-input-requestManyMaxWait" placeholder="2000" min="1" max="60000">
+              <span class="nats-unit">ms</span>
+            </div>
+            <div class="form-tips">
+              Hard ceiling on the whole collection window, regardless of strategy - a subscriber that never replies cannot hang this node past this limit.
+            </div>
+          </div>
+          <div class="nats-form-row" id="request-many-maxmessages-row">
+            <label><i class="fa fa-list-ol"></i>Max Messages <span class="nats-badge nats-badge-optional">optional</span></label>
+            <input type="number" id="node-input-requestManyMaxMessages" placeholder="0 = unlimited" min="0">
+            <div class="form-tips">
+              Count strategy only - verified against a real broker, the other strategies silently ignore this field. Stop early once this many replies arrive. 0 = unlimited (bounded only by Max Wait).
+            </div>
+          </div>
+          <div class="nats-form-row" id="request-many-stall-row">
+            <label><i class="fa fa-clock-o"></i>Stall Window</label>
+            <div class="nats-inline-row">
+              <input type="number" id="node-input-requestManyStall" placeholder="200" min="1" max="60000">
+              <span class="nats-unit">ms</span>
+            </div>
+            <div class="form-tips">
+              Stall strategy only: stop once this long passes with no new reply.
+            </div>
+          </div>
+          <div class="form-tips">
+            Produces exactly one output message containing the whole collected batch (<code>msg.payload</code> as an array) - not one message per reply.
           </div>
         </div>
 
@@ -473,6 +537,30 @@ msg.error = { message: "Request timeout", code: "TIMEOUT" };
 #### Auto-Reply Handler (Service Side)
 
 For building services in Reply mode: forwards the incoming message to the output unchanged. When the processed response is looped back into this node's input, it is published back to the request's reply subject.
+
+#### Request Many (Scatter-Gather)
+
+Broadcasts one request and collects every reply that arrives within a bounded window into a single output message - useful for "ask N services, gather whatever answers" patterns. Unlike Request mode, there is no fallback-to-publish on timeout: an empty or partial batch is a normal result, not a failure.
+
+ - **Timer** - collect until Max Wait elapses, whatever arrived by then wins.
+ - **Count** - stop as soon as Max Messages replies arrive (still bounded by Max Wait as a safety net).
+ - **Stall** - stop once no new reply has arrived for the Stall Window, even if Max Wait hasn't elapsed yet (renamed from the v2 client's "Jitter" strategy).
+ - **Sentinel** - stop when a responder sends an empty reply signalling "no more coming" (a protocol convention some services use, not something this node injects).
+
+Max Messages only takes effect on the Count strategy (verified against a real broker: the other three strategies silently ignore it). A responder that never replies cannot hang this node past Max Wait, regardless of strategy.
+
+```
+// Input
+msg.payload = { action: "healthCheck" };
+msg.topic = "workers.broadcast";
+
+// Output (always exactly one message, however many replies arrived)
+msg.payload = [{ status: "ok" }, { status: "ok" }];       // decoded payloads
+msg.replies = [{ payload: {...}, headers: {...}, subject: "..." }, ...];
+msg.replyCount = 2;
+```
+
+Per-message overrides (all optional, fall back to the node's configured defaults): `msg.requestManyStrategy`, `msg.requestManyMaxWait`, `msg.requestManyMaxMessages`, `msg.requestManyStall`.
 
 ### Subject Wildcards
 

@@ -349,6 +349,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Message TTL | ✅ Complete | `nats-suite-publish` | Message expiration |
 | Message Tracing | 🔄 Partial | `nats-suite-server` | One connection-level switch; covers `nats-suite-publish` and `nats-suite-stream-publisher` today, not yet KV/Object Store/Service |
 | Dynamic Server Pool | ✅ Complete | `nats-suite-server-pool` | Get/set the client's known server list; `reconnectAfterSet` forces an explicit reconnect onto the new pool |
+| Scatter-Gather Request | ✅ Complete | `nats-suite-publish` | `requestMany` mode; `timer`/`count`/`stall`/`sentinel` strategies, collects all replies into one output message |
 | Subject Mapping | ❌ Not Implemented | - | Server-side subject transforms |
 | Weighted Mapping | ❌ Not Implemented | - | Canary testing / A-B routing |
 
@@ -454,7 +455,7 @@ This section provides a comprehensive overview of NATS features and their implem
 
 | Category | Implemented | In Development | Not Implemented | Coverage |
 |----------|-------------|----------------|-----------------|----------|
-| **Core NATS** | 15 | 1 | 2 | 83% |
+| **Core NATS** | 16 | 1 | 2 | 84% |
 | **JetStream** | 20 | 5 | 0 | 80% |
 | **KV Store** | 16 | 0 | 0 | 100% |
 | **Object Store** | 13 | 0 | 0 | 100% |
