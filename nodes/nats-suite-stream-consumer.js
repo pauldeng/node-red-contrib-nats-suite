@@ -459,6 +459,59 @@ module.exports = function (RED) {
             break;
           }
 
+          case 'get-message': {
+            const hasSeq = msg.seq !== undefined && msg.seq !== null;
+            const hasLastBySubject =
+              msg.lastBySubject !== undefined && msg.lastBySubject !== null;
+            if (hasSeq === hasLastBySubject) {
+              return new Error(
+                'get-message requires exactly one of msg.seq (number) or msg.lastBySubject (string)'
+              );
+            }
+
+            const query = hasSeq
+              ? { seq: parseInt(msg.seq, 10) }
+              : { last_by_subj: msg.lastBySubject };
+
+            // jsm.direct.getMessage() is the faster path but the server
+            // rejects it unless the stream has allow_direct: true -
+            // jsm.streams.getMessage() (manager-level) always works.
+            const useDirectGet =
+              msg.useDirectGet !== undefined
+                ? !!msg.useDirectGet
+                : !!config.useDirectGet;
+            const storedMsg = useDirectGet
+              ? await jsm.direct.getMessage(streamName, query)
+              : await jsm.streams.getMessage(streamName, query);
+
+            // null is a valid "no match" result, not a thrown error - a
+            // targeted lookup finding nothing is a real failure here, not a
+            // silent empty success.
+            if (!storedMsg) {
+              return new Error('No message found for the given query');
+            }
+
+            // Mirrors the 'list' case below: the real content belongs at
+            // the top level of msg (like a live consume), not nested inside
+            // msg.payload the way the metadata-only info/delete/purge cases
+            // above do - there's no separate "content" for those to hold.
+            msg.operation = 'get-message';
+            msg.payload = fromMsg(storedMsg, parseMode);
+            msg.stream = streamName;
+            msg.subject = storedMsg.subject;
+            msg.sequence = toNumber(storedMsg.seq);
+            msg.timestamp = storedMsg.timestamp;
+            if (storedMsg.header) {
+              const headers = {};
+              for (const [key, values] of storedMsg.header) {
+                headers[key] = values.length === 1 ? values[0] : values;
+              }
+              msg.headers = headers;
+            }
+            setGreenStatus(streamName);
+            break;
+          }
+
           default:
             return new Error(`Unknown operation: ${operation}`);
         }
@@ -680,7 +733,7 @@ module.exports = function (RED) {
         const operation = msg.operation || config.operation || 'consume';
 
         // Stream management operations
-        if (operation === 'purge') {
+        if (operation === 'purge' || operation === 'get-message') {
           done(await performStreamOperation(msg, send));
           return;
         }

@@ -19,6 +19,7 @@
       batchSize: { value: 1 },
       maxWait: { value: 1000 },
       operation: { value: 'consume' },
+      useDirectGet: { value: false },
       dataformat: { value: 'auto', required: true },
       debug: { value: false },
     },
@@ -64,6 +65,8 @@
           $('#consume-config').slideUp(200);
           $('#consumer-settings-section').slideUp(200);
         }
+
+        $('#get-message-config-section').toggle(op === 'get-message');
       }
 
       // Operation handler
@@ -223,6 +226,7 @@
             <option value="resume">Resume Consumer</option>
             <option value="monitor">Monitor Stats</option>
             <option value="purge">Purge Stream</option>
+            <option value="get-message">Get Message (direct/by-seq)</option>
           </select>
         </div>
       </div>
@@ -273,6 +277,26 @@
             <label><i class="fa fa-clock-o"></i>Start Time</label>
             <input type="text" id="node-input-startTime" placeholder="ISO 8601, e.g. 2026-01-01T00:00:00Z">
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Get Message Configuration -->
+    <div class="nats-section" id="get-message-config-section">
+      <div class="nats-section-header">
+        <div class="nats-section-title">
+          <i class="fa fa-search"></i>
+          <span>Get Message Configuration</span>
+        </div>
+        <i class="fa fa-chevron-down nats-section-toggle"></i>
+      </div>
+      <div class="nats-section-content">
+        <div class="nats-checkbox-row">
+          <input type="checkbox" id="node-input-useDirectGet">
+          <label for="node-input-useDirectGet"><i class="fa fa-bolt"></i>Use Direct Get (faster; requires the stream's Allow Direct flag)</label>
+        </div>
+        <div class="form-tips">
+          Set <code>msg.stream</code> (or configure Stream Name in Consumer Configuration above) and exactly one of <code>msg.seq</code> (number) or <code>msg.lastBySubject</code> (string) per request - all message-driven, not configured here. <code>msg.useDirectGet</code> overrides this checkbox per-message.
         </div>
       </div>
     </div>
@@ -360,6 +384,9 @@ Consumes messages from NATS JetStream with acknowledgment control.
 : config (object, optional) : Native `ConsumerConfig` for create/add operations
 : options (object, optional) : Native create, stream info/purge, or fetch options for the selected operation
 : until (string, optional) : ISO date/time for the server-side pause operation; omit to pause indefinitely
+: seq (number, optional) : Get Message operation - retrieve by stream sequence (exactly one of `seq`/`lastBySubject` required)
+: lastBySubject (string, optional) : Get Message operation - retrieve the last message stored for this subject
+: useDirectGet (boolean, optional) : Get Message operation - overrides the "Use Direct Get" checkbox per-message
 
 ### Outputs
 
@@ -368,6 +395,20 @@ Consumes messages from NATS JetStream with acknowledgment control.
 : ack (function) : Acknowledge message
 : nak (function) : Negative acknowledge (retry)
 : term (function) : Terminate (no retry)
+
+### Get Message
+
+Retrieves a single stored message without a consumer, by stream sequence or
+by the last message on a subject. Set `msg.stream` (or the Stream Name field
+while in Consume mode), and exactly one of `msg.seq` or `msg.lastBySubject`.
+
+`jsm.streams.getMessage()` (the default) always works. Checking "Use Direct
+Get" switches to the faster `jsm.direct.getMessage()`, which requires the
+target stream to have been created with `allow_direct: true` (the "Allow
+Direct" checkbox on `nats-suite-stream-publisher`) - the server rejects the
+request with a real error otherwise, it does not silently fall back.
+
+No matching message errors rather than returning an empty payload.
 
 ### Acknowledgment
 

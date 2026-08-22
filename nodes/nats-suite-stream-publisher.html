@@ -29,6 +29,7 @@
       allowRollupHdrs: { value: false },
       allowMsgTtl: { value: false },
       allowMsgSchedules: { value: false },
+      allowDirect: { value: false },
       scheduleType: { value: 'none' },
       scheduleAt: {
         value: '',
@@ -531,6 +532,13 @@
               <i class="fa fa-clock-o"></i>Allow Message Schedules
             </label>
             <div class="form-tips">Enable delayed delivery. Cannot be disabled after enabling</div>
+          </div>
+          <div class="nats-form-row create-only">
+            <label>
+              <input type="checkbox" id="node-input-allowDirect" style="width: auto; margin-right: 8px;">
+              <i class="fa fa-bolt"></i>Allow Direct Get
+            </label>
+            <div class="form-tips">Enables the faster jsm.direct.getMessage() read path (used by nats-suite-stream-consumer's "Get Message" operation) instead of the always-available manager-level jsm.streams.getMessage()</div>
           </div>
         </div>
       </div>

@@ -128,13 +128,15 @@ module.exports = function (RED) {
           const info = await jsm.streams.info(config.streamName);
           if (
             (config.allowMsgTtl && !info.config.allow_msg_ttl) ||
-            (config.allowMsgSchedules && !info.config.allow_msg_schedules)
+            (config.allowMsgSchedules && !info.config.allow_msg_schedules) ||
+            (config.allowDirect && !info.config.allow_direct)
           ) {
             await jsm.streams.update(config.streamName, {
               ...info.config,
               allow_msg_ttl: info.config.allow_msg_ttl || !!config.allowMsgTtl,
               allow_msg_schedules:
                 info.config.allow_msg_schedules || !!config.allowMsgSchedules,
+              allow_direct: info.config.allow_direct || !!config.allowDirect,
             });
           }
           streamReady = true;
@@ -169,6 +171,7 @@ module.exports = function (RED) {
               allow_rollup_hdrs: !!config.allowRollupHdrs,
               allow_msg_ttl: !!config.allowMsgTtl,
               allow_msg_schedules: !!config.allowMsgSchedules,
+              allow_direct: !!config.allowDirect,
             };
 
             await jsm.streams.add(streamConfig);
@@ -338,6 +341,10 @@ module.exports = function (RED) {
                   msg.allowMsgSchedules !== undefined
                     ? msg.allowMsgSchedules
                     : config.allowMsgSchedules || false,
+                allow_direct:
+                  msg.allowDirect !== undefined
+                    ? msg.allowDirect
+                    : config.allowDirect || false,
                 sealed:
                   msg.sealed !== undefined
                     ? msg.sealed
@@ -401,6 +408,10 @@ module.exports = function (RED) {
               streamConfig.allow_msg_schedules =
                 currentStream.config.allow_msg_schedules ||
                 streamConfig.allow_msg_schedules;
+              // allow_direct is freely toggleable (unlike the one-way
+              // allow_msg_ttl/allow_msg_schedules/sealed latches above), so
+              // it is intentionally left to the spread's normal precedence:
+              // an explicit allow_direct in msg.payload wins either way.
               node.log(
                 `[STREAM PUB] Updating stream from payload config: ${streamConfig.name}`
               );
@@ -502,6 +513,17 @@ module.exports = function (RED) {
                   currentStream.config.allow_msg_schedules ||
                   msg.allowMsgSchedules === true ||
                   config.allowMsgSchedules === true,
+                // Unlike allow_msg_ttl/allow_msg_schedules above, allow_direct
+                // is freely toggleable in both directions (confirmed against
+                // a real server: update can flip it true->false and
+                // false->true) - it's a read-path switch, not a latch that
+                // could orphan already-scheduled/TTL'd messages if disabled.
+                allow_direct:
+                  msg.allowDirect !== undefined
+                    ? msg.allowDirect
+                    : config.allowDirect !== undefined
+                      ? config.allowDirect
+                      : currentStream.config.allow_direct,
               };
               node.log(
                 `[STREAM PUB] Updating stream from properties: ${streamConfig.name}`

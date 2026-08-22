@@ -20,7 +20,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { jwtAuthenticator, nkeys } = require('@nats-io/nats-core');
+const {
+  jwtAuthenticator,
+  nkeys,
+  headers: natsHeaders,
+} = require('@nats-io/nats-core');
 const {
   AckPolicy,
   jetstream,
@@ -1007,4 +1011,306 @@ test('jwtAuthenticator(jwt, seed): both arguments are honored (bug 2)', () => {
     otherAuth.sig,
     'the signature must depend on the seed, proving the seed argument is used'
   );
+});
+
+// --- Step 5 Agent A (NATS-3.4-GAP-PLAN.md): allowDirect wiring ------------
+//
+// allow_direct was previously a dead checkbox on nats-suite-stream-publisher
+// - it set the stream config field but nothing downstream ever read it. This
+// re-adds it and wires it into the real create/update stream calls. The
+// consumer-side jsm.direct.getMessage() read path that actually uses this
+// flag is a parallel change (Agent B, nats-suite-stream-consumer.js) and is
+// tested separately there.
+
+test(
+  'stream-publisher: allowDirect on create actually sets allow_direct on the real stream',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('directget-create-');
+    const streamName = `STREAM_${id}`;
+    const subject = `test.jetstream.directget.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+
+    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+    publisher.storage = 'memory';
+    publisher.allowDirect = true;
+
+    const nodes = [serverNode(srv), publisher, debugNode(dbg)];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const jsm = await jetstreamManager(directNc);
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.config.allow_direct,
+        true,
+        'allowDirect on the node must produce allow_direct: true on the real stream, not just sit unused in the editor'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: "update" preserves an existing allow_direct: true when neither msg nor config specify it',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('directget-update-');
+    const streamName = `STREAM_${id}`;
+    const subject = `test.jetstream.directget.${id}`;
+    const srv = `${id}srv`;
+    const spubCreate = `${id}spubcreate`;
+    const spubUpdate = `${id}spubupdate`;
+    const injUpdate = `${id}injupdate`;
+    const dbg = `${id}dbg`;
+
+    // Creates the stream with allow_direct: true.
+    const creator = streamPublisherNode(
+      spubCreate,
+      srv,
+      streamName,
+      subject,
+      dbg
+    );
+    creator.storage = 'memory';
+    creator.allowDirect = true;
+
+    // A second node targeting the same stream, deliberately NOT setting
+    // allowDirect at all (config.allowDirect stays undefined, not false) -
+    // proves the update path falls through to currentStream.config.allow_direct
+    // rather than defaulting to false and silently disabling it.
+    const updater = streamPublisherNode(
+      spubUpdate,
+      srv,
+      streamName,
+      subject,
+      dbg
+    );
+    updater.storage = 'memory';
+    updater.operation = 'update';
+    updater.createOnInit = false;
+
+    const nodes = [
+      serverNode(srv),
+      creator,
+      updater,
+      injectNode(injUpdate, spubUpdate, [
+        { p: 'operation', v: 'update', vt: 'str' },
+      ]),
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const creatorReady = comms.waitForStatus(
+        spubCreate,
+        d => d.fill === 'green',
+        15000
+      );
+      const updaterReady = comms.waitForStatus(
+        spubUpdate,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await creatorReady;
+      await updaterReady;
+
+      const jsm = await jetstreamManager(directNc);
+      const beforeUpdate = await jsm.streams.info(streamName);
+      assert.equal(
+        beforeUpdate.config.allow_direct,
+        true,
+        'precondition: stream must start with allow_direct: true'
+      );
+
+      const updated = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injUpdate);
+      const updateMsg = await updated;
+      assert.equal(updateMsg.payload.operation, 'update');
+      assert.equal(updateMsg.payload.success, true);
+
+      const afterUpdate = await jsm.streams.info(streamName);
+      assert.equal(
+        afterUpdate.config.allow_direct,
+        true,
+        'update with neither msg.allowDirect nor config.allowDirect set must preserve the existing value, not reset it to false'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+// --- Direct message get (Step 5, NATS-3.4-GAP-PLAN.md) --------------------
+
+function catchNode(id, scope, wireTo) {
+  return {
+    id,
+    type: 'catch',
+    z: 'FLOW',
+    name: '',
+    scope,
+    uncaught: false,
+    wires: [[wireTo]],
+  };
+}
+
+test('stream-consumer: "get-message" retrieves a known message by seq (direct) and by last-by-subject (manager), errors when not found', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('get-message-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.get-message.${id}`;
+  const srv = `${id}srv`;
+  const scon = `${id}scon`;
+  const injBySeq = `${id}injseq`;
+  const injByLast = `${id}injlast`;
+  const injNotFound = `${id}injnf`;
+  const fnBySeq = `${id}fnseq`;
+  const fnByLast = `${id}fnlast`;
+  const fnNotFound = `${id}fnnf`;
+  const cat = `${id}cat`;
+  const dbg = `${id}dbg`;
+  const dbgCatch = `${id}dbgcatch`;
+
+  const directNc = await connectDirectNats();
+  const comms = connectComms();
+  let flowId;
+  try {
+    const jsm = await jetstreamManager(directNc);
+    await jsm.streams.add({
+      name: streamName,
+      subjects: [subject],
+      storage: 'memory',
+      allow_direct: true,
+    });
+
+    // Publish directly (not through a flow) so the real seq is known to
+    // this test before the get-message flow is even built.
+    const js = jetstream(directNc);
+    const hdrs = natsHeaders();
+    hdrs.set('x-test-header', 'hello-header');
+    const payload = { hello: 'get-message' };
+    const pubAck = await js.publish(subject, JSON.stringify(payload), {
+      headers: hdrs,
+    });
+
+    const consumer = streamConsumerNode(
+      scon,
+      srv,
+      streamName,
+      `${id}-unused-consumer`,
+      subject,
+      dbg
+    );
+    consumer.operation = 'get-message';
+
+    const nodes = [
+      serverNode(srv),
+      consumer,
+      injectNode(injBySeq, fnBySeq, [{ p: 'payload', v: '', vt: 'str' }]),
+      functionNode(
+        fnBySeq,
+        `msg.seq = ${pubAck.seq};
+         msg.useDirectGet = true;
+         return msg;`,
+        scon
+      ),
+      injectNode(injByLast, fnByLast, [{ p: 'payload', v: '', vt: 'str' }]),
+      functionNode(
+        fnByLast,
+        `msg.lastBySubject = ${JSON.stringify(subject)};
+         msg.useDirectGet = false;
+         return msg;`,
+        scon
+      ),
+      injectNode(injNotFound, fnNotFound, [{ p: 'payload', v: '', vt: 'str' }]),
+      functionNode(
+        fnNotFound,
+        `msg.seq = ${pubAck.seq + 999999};
+         return msg;`,
+        scon
+      ),
+      catchNode(cat, [scon], dbgCatch),
+      debugNode(dbg),
+      debugNode(dbgCatch),
+    ];
+
+    await comms.ready;
+    const ready = comms.waitForStatus(scon, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await ready;
+
+    // 1. By sequence, via the faster direct-get path.
+    const bySeq = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injBySeq);
+    const bySeqMsg = await bySeq;
+    assert.equal(bySeqMsg.operation, 'get-message');
+    assert.deepEqual(bySeqMsg.payload, payload, 'payload must round-trip exactly');
+    assert.equal(bySeqMsg.subject, subject);
+    assert.equal(bySeqMsg.sequence, pubAck.seq);
+    assert.equal(
+      bySeqMsg.headers['x-test-header'],
+      'hello-header',
+      'headers must round-trip exactly via the direct-get path'
+    );
+
+    // 2. By last-message-for-subject, via the always-available manager path.
+    const byLast = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injByLast);
+    const byLastMsg = await byLast;
+    assert.deepEqual(
+      byLastMsg.payload,
+      payload,
+      'manager-level getMessage() must return the same message as the direct path'
+    );
+    assert.equal(byLastMsg.sequence, pubAck.seq);
+    assert.equal(
+      byLastMsg.headers['x-test-header'],
+      'hello-header',
+      'headers must round-trip exactly via the manager-level path too'
+    );
+
+    // 3. No matching message: a real error, not a silent empty payload.
+    const caught = comms.waitForDebug(dbgCatch, 8000);
+    await triggerInject(injNotFound);
+    const caughtMsg = await caught;
+    assert.ok(caughtMsg.error, 'a not-found lookup must reach the Catch node');
+    assert.match(
+      caughtMsg.error.message,
+      /no message found/i,
+      'the error must be the get-message not-found error, not something else'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
 });
