@@ -600,3 +600,77 @@ test('reconnect + status: connect, disconnect, recover across every node type', 
     await startNats().catch(() => {});
   }
 });
+
+// Coverage for Step 3 of NATS-3.4-GAP-PLAN.md: getServers()/setServers()/
+// reconnect() pass-throughs on nats-suite-server. These are exercised by
+// instantiating the real node file against the real broker, using the same
+// minimal RED shim `promotion.test.js` uses for unit-level checks - no
+// node-red-node-test-helper, and no NATS mocking (the node's own connect()
+// call reaches the real Docker broker).
+//
+// Kept as a direct-construction shim rather than a deployed flow through
+// nats-suite-server-pool (test/server-pool.test.js) on purpose: that node
+// validates its own input and never calls setServers([]) on the real client,
+// so it can't prove the client itself throws on an empty pool. This test
+// proves the raw config-node contract; server-pool.test.js proves the
+// consumer-facing msg shapes, validation-before-touching-the-connection, and
+// (via reconnectAfterSet) that reconnect() really moves a live connection.
+function fakeRedForServerNode() {
+  const constructors = new Map();
+  return {
+    constructors,
+    nodes: {
+      registerType(type, constructor) {
+        constructors.set(type, constructor);
+      },
+      createNode(node, config) {
+        node.id = config.id;
+        node.credentials = {};
+        node.handlers = new Map();
+        node.on = (event, handler) => node.handlers.set(event, handler);
+        node.status = () => {};
+        node.error = () => {};
+        node.warn = () => {};
+        node.log = () => {};
+      },
+    },
+  };
+}
+
+test('getServers()/setServers() round-trip against the real broker', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const RED = fakeRedForServerNode();
+  require(path.join(REPO_ROOT, 'nodes/nats-suite-server.js'))(RED);
+  const Constructor = RED.constructors.get('nats-suite-server');
+  const node = new Constructor({ id: 'server-pool-test', server: NATS_URL });
+
+  try {
+    await node.getConnection();
+
+    const before = node.getServers();
+    assert.ok(
+      before.some(s => s.listen === NATS_URL),
+      `getServers() must include the connected broker (${NATS_URL}), got ${JSON.stringify(before)}`
+    );
+
+    assert.throws(
+      () => node.setServers([]),
+      'setServers([]) must throw rather than silently accept an empty pool'
+    );
+
+    node.setServers([NATS_URL, 'localhost:4223']);
+    const after = node.getServers().map(s => s.listen);
+    assert.deepEqual(
+      after.sort(),
+      [NATS_URL, 'localhost:4223'].sort(),
+      'getServers() must reflect the pool just written by setServers(), round-tripped via .listen'
+    );
+  } finally {
+    await node.handlers.get('close').call(node, () => {});
+  }
+});

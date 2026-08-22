@@ -68,6 +68,7 @@ Or in the Node-RED Editor:
 | Node | Description | Category |
 |------|-------------|----------|
 | **nats-suite-server** | NATS Server connection configuration (for all other nodes) | Config |
+| **nats-suite-server-pool** | Get/set the shared connection's known server pool (`getServers`/`setServers`) | Management |
 | **nats-suite-server-manager** | Embedded NATS Server with MQTT bridge, JetStream, custom binaries, Leaf Node support | Management |
 
 ### Core NATS
@@ -347,6 +348,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Leaf Nodes | ✅ Complete | `nats-suite-server-manager` | Edge server connections |
 | Message TTL | ✅ Complete | `nats-suite-publish` | Message expiration |
 | Message Tracing | 🔄 Partial | `nats-suite-server` | One connection-level switch; covers `nats-suite-publish` and `nats-suite-stream-publisher` today, not yet KV/Object Store/Service |
+| Dynamic Server Pool | ✅ Complete | `nats-suite-server-pool` | Get/set the client's known server list; `reconnectAfterSet` forces an explicit reconnect onto the new pool |
 | Subject Mapping | ❌ Not Implemented | - | Server-side subject transforms |
 | Weighted Mapping | ❌ Not Implemented | - | Canary testing / A-B routing |
 
@@ -450,7 +452,7 @@ This section provides a comprehensive overview of NATS features and their implem
 
 | Category | Implemented | In Development | Not Implemented | Coverage |
 |----------|-------------|----------------|-----------------|----------|
-| **Core NATS** | 14 | 1 | 2 | 82% |
+| **Core NATS** | 15 | 1 | 2 | 83% |
 | **JetStream** | 20 | 5 | 0 | 80% |
 | **KV Store** | 16 | 0 | 0 | 100% |
 | **Object Store** | 9 | 0 | 4 | 69% |

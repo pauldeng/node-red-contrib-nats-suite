@@ -21,6 +21,7 @@
     "version": ">=5.0.0",
     "nodes": {
       "nats-suite-server": "nodes/nats-suite-server.js",
+      "nats-suite-server-pool": "nodes/nats-suite-server-pool.js",
       "nats-suite-publish": "nodes/nats-suite-publish.js",
       "nats-suite-subscribe": "nodes/nats-suite-subscribe.js",
       "nats-suite-stream-publisher": "nodes/nats-suite-stream-publisher.js",

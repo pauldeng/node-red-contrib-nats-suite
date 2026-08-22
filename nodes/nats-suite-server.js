@@ -647,6 +647,26 @@ module.exports = function (RED) {
       return { traceDestination: this.traceDestination };
     };
 
+    // Pass-throughs to the real NatsConnection. setServers() only replaces
+    // the pool for future reconnect attempts - it does not drop the live
+    // connection. reconnect() is upstream's own "experimental, subject to
+    // be removed" API; it forces an immediate reconnect and rejects any
+    // in-flight requests when it does.
+    this.getServers = () => {
+      if (!this.connection) return [];
+      return this.connection.getServers();
+    };
+
+    this.setServers = servers => {
+      if (!this.connection) throw new Error('Cannot set servers: not connected');
+      this.connection.setServers(servers);
+    };
+
+    this.reconnect = () => {
+      if (!this.connection) throw new Error('Cannot reconnect: not connected');
+      return this.connection.reconnect();
+    };
+
     const closeConnection = async connection => {
       const bounded = (promise, timeout = 1000) => new Promise(resolve => {
         const timer = setTimeout(resolve, timeout);
