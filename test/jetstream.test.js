@@ -1314,3 +1314,494 @@ test('stream-consumer: "get-message" retrieves a known message by seq (direct) a
     await ignoreFailure(directNc.close());
   }
 });
+
+test('stream-consumer: priority_groups/priority_policy/priority_timeout land on the real consumer created at deploy', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('priority-create-');
+  const streamName = `STREAM_${id}`;
+  const consumerName = `CONSUMER_${id}`;
+  const subject = `test.jetstream.prioritycreate.${id}`;
+  const srv = `${id}srv`;
+  const scon = `${id}scon`;
+  const dbg = `${id}dbg`;
+
+  const directNc = await connectDirectNats();
+  const comms = connectComms();
+  let flowId;
+  try {
+    const jsm = await jetstreamManager(directNc);
+    await jsm.streams.add({
+      name: streamName,
+      subjects: [subject],
+      storage: 'memory',
+    });
+
+    const consumer = streamConsumerNode(
+      scon,
+      srv,
+      streamName,
+      consumerName,
+      subject,
+      dbg
+    );
+    consumer.priorityGroups = 'grp-a, grp-b';
+    consumer.priorityPolicy = 'overflow';
+    consumer.priorityTimeout = '30s';
+
+    const nodes = [serverNode(srv), consumer, debugNode(dbg)];
+
+    await comms.ready;
+    const ready = comms.waitForStatus(scon, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await ready;
+
+    const info = await jsm.consumers.info(streamName, consumerName);
+    assert.deepEqual(
+      info.config.priority_groups,
+      ['grp-a', 'grp-b'],
+      'comma-separated priorityGroups must land as a real string array'
+    );
+    assert.equal(info.config.priority_policy, 'overflow');
+    assert.equal(
+      info.config.priority_timeout,
+      30_000_000_000,
+      'priorityTimeout is a duration string converted to nanoseconds (unlike KV markerTTL, a raw Go-duration string)'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
+
+test('stream-consumer: pedantic rejects a real config/ack_wait mismatch that non-pedantic accepts', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('pedantic-');
+  const streamName = `STREAM_${id}`;
+  const subject = `test.jetstream.pedantic.${id}`;
+  const srv = `${id}srv`;
+  const scon = `${id}scon`;
+  const injNonPedantic = `${id}injnp`;
+  const injPedantic = `${id}injp`;
+  const fnNonPedantic = `${id}fnnp`;
+  const fnPedantic = `${id}fnp`;
+  const cat = `${id}cat`;
+  const dbg = `${id}dbg`;
+  const dbgCatch = `${id}dbgcatch`;
+
+  const directNc = await connectDirectNats();
+  const comms = connectComms();
+  let flowId;
+  try {
+    const jsm = await jetstreamManager(directNc);
+    await jsm.streams.add({
+      name: streamName,
+      subjects: [subject],
+      storage: 'memory',
+    });
+
+    const consumer = streamConsumerNode(
+      scon,
+      srv,
+      streamName,
+      `${id}-unused-consumer`,
+      subject,
+      dbg
+    );
+    consumer.operation = 'create';
+
+    // A backoff whose first value does not equal ack_wait: the server
+    // accepts this normally (verified against a real broker) but rejects
+    // it with "pedantic mode: first backoff value has to equal batch
+    // AckWait" once pedantic is on - a real, empirically-confirmed
+    // pedantic-only rejection, not a base-validation error that would fire
+    // either way.
+    const mismatchConfig = {
+      ack_policy: 'explicit',
+      ack_wait: 5_000_000_000,
+      max_deliver: 5,
+      backoff: [10_000_000_000, 20_000_000_000],
+    };
+
+    const nodes = [
+      serverNode(srv),
+      consumer,
+      injectNode(injNonPedantic, fnNonPedantic, [
+        { p: 'payload', v: '', vt: 'str' },
+      ]),
+      functionNode(
+        fnNonPedantic,
+        `msg.config = ${JSON.stringify({ ...mismatchConfig, durable_name: `${id}-nonpedantic` })};
+         msg.pedantic = false;
+         return msg;`,
+        scon
+      ),
+      injectNode(injPedantic, fnPedantic, [
+        { p: 'payload', v: '', vt: 'str' },
+      ]),
+      functionNode(
+        fnPedantic,
+        `msg.config = ${JSON.stringify({ ...mismatchConfig, durable_name: `${id}-pedantic` })};
+         msg.pedantic = true;
+         return msg;`,
+        scon
+      ),
+      catchNode(cat, [scon], dbgCatch),
+      debugNode(dbg),
+      debugNode(dbgCatch),
+    ];
+
+    await comms.ready;
+    const ready = comms.waitForStatus(scon, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await ready;
+
+    const nonPedanticResult = comms.waitForDebug(dbg, 8000);
+    await triggerInject(injNonPedantic);
+    const nonPedanticMsg = await nonPedanticResult;
+    assert.equal(
+      nonPedanticMsg.payload.success,
+      true,
+      'the same ack_wait/backoff mismatch must be accepted when pedantic is off'
+    );
+
+    const pedanticCaught = comms.waitForDebug(dbgCatch, 8000);
+    await triggerInject(injPedantic);
+    const pedanticCaughtMsg = await pedanticCaught;
+    assert.ok(
+      pedanticCaughtMsg.error,
+      'pedantic:true must reach the Catch node for the same config'
+    );
+    assert.match(
+      pedanticCaughtMsg.error.message,
+      /pedantic/i,
+      'the rejection must be the real pedantic-mode error, not something else'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
+
+test('stream-consumer: pull overflow (group/min_pending) actually withholds delivery below the threshold and releases it above', async t => {
+  if (!(await checkStack(t))) return;
+
+  const id = uid('overflow-');
+  const streamName = `STREAM_${id}`;
+  const consumerName = `CONSUMER_${id}`;
+  const subject = `test.jetstream.overflow.${id}`;
+  const srv = `${id}srv`;
+  const scon = `${id}scon`;
+  const sconInj = `${id}sconinj`;
+  const dbg = `${id}dbg`;
+
+  const directNc = await connectDirectNats();
+  const comms = connectComms();
+  let flowId;
+  try {
+    const jsm = await jetstreamManager(directNc);
+    await jsm.streams.add({
+      name: streamName,
+      subjects: [subject],
+      storage: 'memory',
+    });
+    const js = jetstream(directNc);
+
+    const consumer = streamConsumerNode(
+      scon,
+      srv,
+      streamName,
+      consumerName,
+      subject,
+      dbg
+    );
+    consumer.ackPolicy = 'explicit';
+    consumer.priorityGroups = 'g1';
+    consumer.priorityPolicy = 'overflow';
+    consumer.pullGroup = 'g1';
+    consumer.pullMinPending = 5;
+    consumer.batchSize = 10;
+    consumer.maxWait = 1500;
+
+    const nodes = [
+      serverNode(srv),
+      consumer,
+      injectNode(sconInj, scon, [{ p: 'payload' }]),
+      debugNode(dbg),
+    ];
+
+    await comms.ready;
+    const ready = comms.waitForStatus(scon, d => d.fill === 'green', 15000);
+    flowId = await deployFlow(nodes);
+    await ready;
+
+    // 2 pending, below the configured min_pending: 5 - the real server
+    // must withhold delivery entirely (verified against a real broker
+    // before writing this assertion).
+    await js.publish(subject, 'm1');
+    await js.publish(subject, 'm2');
+    const withheld = comms.waitForDebug(dbg, 2500);
+    await triggerInject(sconInj);
+    await assert.rejects(
+      withheld,
+      /timed out/i,
+      'below min_pending, a triggered fetch must not receive anything'
+    );
+
+    // 3 more messages bring pending to 5, meeting min_pending - delivery
+    // must now proceed.
+    await js.publish(subject, 'm3');
+    await js.publish(subject, 'm4');
+    await js.publish(subject, 'm5');
+    const delivered = comms.waitForDebug(dbg, 8000);
+    await triggerInject(sconInj);
+    const deliveredMsg = await delivered;
+    assert.ok(
+      deliveredMsg,
+      'once pending reaches min_pending, the real server must deliver'
+    );
+  } finally {
+    if (flowId) await ignoreFailure(deleteFlow(flowId));
+    comms.close();
+    await deleteStream(directNc, streamName);
+    await ignoreFailure(directNc.close());
+  }
+});
+
+// --- expect fields + persist_mode (Step 8, NATS-3.4-GAP-PLAN.md) ----------
+
+test(
+  'stream-publisher: expectLastMsgID/expectLastSequence enforce real optimistic concurrency',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('expect-');
+    const streamName = `STREAM_${id}`;
+    const subject = `test.jetstream.expect.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+    const injBaseline = `${id}injbaseline`;
+    const injMsgIDMismatch = `${id}injmsgidmismatch`;
+    const injMsgIDMatch = `${id}injmsgidmatch`;
+    const injSeqMismatch = `${id}injseqmismatch`;
+    const injSeqMatch = `${id}injseqmatch`;
+
+    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+    publisher.storage = 'memory';
+
+    const nodes = [
+      serverNode(srv),
+      publisher,
+      injectNode(injBaseline, spub, [
+        { p: 'payload', v: 'baseline', vt: 'str' },
+        { p: '_msgID', v: 'baseline-id', vt: 'str' },
+      ]),
+      injectNode(injMsgIDMismatch, spub, [
+        { p: 'payload', v: 'msgid-mismatch', vt: 'str' },
+        { p: 'expectLastMsgID', v: 'wrong-id', vt: 'str' },
+      ]),
+      injectNode(injMsgIDMatch, spub, [
+        { p: 'payload', v: 'msgid-match', vt: 'str' },
+        { p: 'expectLastMsgID', v: 'baseline-id', vt: 'str' },
+        { p: '_msgID', v: 'second-id', vt: 'str' },
+      ]),
+      injectNode(injSeqMismatch, spub, [
+        { p: 'payload', v: 'seq-mismatch', vt: 'str' },
+        { p: 'expectLastSequence', v: '999', vt: 'num' },
+      ]),
+      injectNode(injSeqMatch, spub, [
+        { p: 'payload', v: 'seq-match', vt: 'str' },
+        { p: 'expectLastSequence', v: '2', vt: 'num' },
+      ]),
+      debugNode(dbg),
+    ];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const baselineResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injBaseline);
+      const baseline = await baselineResult;
+      assert.equal(baseline.published, true, 'baseline publish must succeed');
+      assert.equal(baseline.sequence, 1);
+
+      const msgIDMismatchResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injMsgIDMismatch);
+      const msgIDMismatch = await msgIDMismatchResult;
+      assert.equal(
+        msgIDMismatch.published,
+        false,
+        'expectLastMsgID must reject a publish when the real last message ID does not match'
+      );
+      assert.match(msgIDMismatch.error, /wrong last msg/i);
+
+      const msgIDMatchResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injMsgIDMatch);
+      const msgIDMatch = await msgIDMatchResult;
+      assert.equal(
+        msgIDMatch.published,
+        true,
+        'expectLastMsgID must allow the publish when the real last message ID matches'
+      );
+      assert.equal(msgIDMatch.sequence, 2);
+
+      const seqMismatchResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injSeqMismatch);
+      const seqMismatch = await seqMismatchResult;
+      assert.equal(
+        seqMismatch.published,
+        false,
+        'expectLastSequence must reject a publish when the real last sequence does not match'
+      );
+      assert.match(seqMismatch.error, /wrong last sequence/i);
+
+      const seqMatchResult = comms.waitForDebug(dbg, 8000);
+      await triggerInject(injSeqMatch);
+      const seqMatch = await seqMatchResult;
+      assert.equal(
+        seqMatch.published,
+        true,
+        'expectLastSequence must allow the publish when the real last sequence matches'
+      );
+      assert.equal(seqMatch.sequence, 3);
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: persistMode "async" on create actually sets persist_mode on the real stream',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('persistmode-');
+    const streamName = `STREAM_${id}`;
+    const subject = `test.jetstream.persistmode.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+
+    // persist_mode "async" is only meaningful on file storage - the real
+    // server rejects it outright on memory streams ("async persist mode is
+    // only supported on file storage"), confirmed against a real broker.
+    const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+    publisher.storage = 'file';
+    publisher.persistMode = 'async';
+    publisher.maxBytes = 65536;
+
+    const nodes = [serverNode(srv), publisher, debugNode(dbg)];
+
+    const comms = connectComms();
+    const directNc = await connectDirectNats();
+    let flowId;
+    try {
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      await connected;
+
+      const jsm = await jetstreamManager(directNc);
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.config.persist_mode,
+        'async',
+        'persistMode "async" on the node must produce persist_mode: "async" on the real stream'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);
+
+test(
+  'stream-publisher: deploying against a pre-existing stream with a mismatched persistMode warns instead of crashing startup',
+  async t => {
+    if (!(await checkStack(t))) return;
+
+    const id = uid('persistmode-existing-');
+    const streamName = `STREAM_${id}`;
+    const subject = `test.jetstream.persistmodeexisting.${id}`;
+    const srv = `${id}srv`;
+    const spub = `${id}spub`;
+    const dbg = `${id}dbg`;
+
+    const directNc = await connectDirectNats();
+    const comms = connectComms();
+    let flowId;
+    try {
+      // persist_mode can never be changed via update once a stream exists
+      // (confirmed against a real broker: the server rejects the attempt
+      // outright, "stream configuration update can not change persist
+      // mode", even though allow_msg_ttl/allow_msg_schedules/allow_direct
+      // CAN all be auto-upgraded this same way on an existing stream). A
+      // stream created here with no persist_mode override, then a node
+      // configured for "async", reproduces exactly the state that used to
+      // make ensureStreamImpl() throw on every startup instead of just
+      // warning and continuing.
+      const jsm = await jetstreamManager(directNc);
+      await jsm.streams.add({
+        name: streamName,
+        subjects: [subject],
+        storage: 'file',
+        max_bytes: 65536,
+      });
+
+      const publisher = streamPublisherNode(spub, srv, streamName, subject, dbg);
+      publisher.storage = 'file';
+      publisher.persistMode = 'async';
+      publisher.maxBytes = 65536;
+
+      const nodes = [serverNode(srv), publisher, debugNode(dbg)];
+
+      await comms.ready;
+      const connected = comms.waitForStatus(
+        spub,
+        d => d.fill === 'green',
+        15000
+      );
+      flowId = await deployFlow(nodes);
+      // Must reach green (i.e. ensureStreamImpl did not throw) even though
+      // the mismatch can never be reconciled.
+      await connected;
+
+      const info = await jsm.streams.info(streamName);
+      assert.equal(
+        info.config.persist_mode,
+        undefined,
+        'the pre-existing stream must be left with its original persist_mode - no update attempt should have been made'
+      );
+    } finally {
+      if (flowId) await ignoreFailure(deleteFlow(flowId));
+      comms.close();
+      await deleteStream(directNc, streamName);
+      await ignoreFailure(directNc.close());
+    }
+  }
+);

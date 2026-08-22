@@ -385,6 +385,10 @@ This section provides a comprehensive overview of NATS features and their implem
 | Stream Republish | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Subject Transforms | 🔄 Partial | `nats-suite-stream-publisher` | Same as Mirrors - no editor UI, works via raw `msg.payload` |
 | Consumer Filter Subject | 🔄 Partial | `nats-suite-stream-consumer` | Basic filtering available |
+| Optimistic Concurrency | ✅ Complete | `nats-suite-stream-publisher` | Editor fields for expected last-msg-ID/last-sequence; other `StreamExpectations` fields stay `msg.options.expect`-passthrough-only |
+| Persist Mode | ✅ Complete | `nats-suite-stream-publisher` | `default`/`async` write-durability mode, fixed at stream creation - the server rejects any attempt to change it later |
+| Priority Groups & Pull Overflow | ✅ Complete | `nats-suite-stream-consumer` | Editor fields for `priority_groups`/`priority_policy`/`priority_timeout` (consumer create) and `group`/`min_pending`/`min_ack_pending`/`priority` (per-fetch defaults) |
+| Pedantic Consumer Creation | ✅ Complete | `nats-suite-stream-consumer` | Server-side strict validation at consumer creation time |
 
 #### KV Store Features
 
@@ -459,7 +463,7 @@ This section provides a comprehensive overview of NATS features and their implem
 | Category | Implemented | In Development | Not Implemented | Coverage |
 |----------|-------------|----------------|-----------------|----------|
 | **Core NATS** | 16 | 1 | 2 | 84% |
-| **JetStream** | 20 | 5 | 0 | 80% |
+| **JetStream** | 24 | 5 | 0 | 83% |
 | **KV Store** | 18 | 0 | 0 | 100% |
 | **Object Store** | 13 | 0 | 0 | 100% |
 | **Services API** | 9 | 0 | 0 | 100% |

@@ -59,6 +59,29 @@ module.exports = function (RED) {
       return value;
     };
 
+    // Builds the PriorityGroups fields (priority_groups/priority_policy/
+    // priority_timeout) shared by both consumer-creation paths below.
+    // priority_timeout is nanoseconds (Nanos = number), same unit as
+    // ack_wait/max_age elsewhere in this codebase, so it reuses the same
+    // parseDuration() helper - unlike KV's markerTTL (a different Step-8
+    // bullet), which is a raw Go-duration string passed straight through.
+    const buildPriorityFields = ({ groups, policy, timeout }) => {
+      const fields = {};
+      if (groups) {
+        const list = String(groups)
+          .split(',')
+          .map(g => g.trim())
+          .filter(Boolean);
+        if (list.length) fields.priority_groups = list;
+      }
+      if (policy && policy !== 'none') fields.priority_policy = policy;
+      if (timeout) {
+        const nanos = parseDuration(timeout);
+        if (nanos) fields.priority_timeout = nanos;
+      }
+      return fields;
+    };
+
     // Helper: Acquire the JetStream client + manager once and cache them. The
     // connection object is stable across native reconnects, so there is no
     // need to re-derive these on every reconnect.
@@ -119,6 +142,11 @@ module.exports = function (RED) {
                 max_deliver: parseInt(config.maxDeliver, 10) || 5,
                 max_ack_pending: parseInt(config.maxAckPending, 10) || 1000,
                 deliver_policy: config.deliverPolicy || 'new',
+                ...buildPriorityFields({
+                  groups: config.priorityGroups,
+                  policy: config.priorityPolicy,
+                  timeout: config.priorityTimeout,
+                }),
               };
 
               // ConsumerConfig.idle_heartbeat and flow_control both require a
@@ -143,7 +171,11 @@ module.exports = function (RED) {
               node.log(
                 `[STREAM CONSUMER] Creating consumer: ${config.consumerName}`
               );
-              await jsm.consumers.add(config.streamName, consumerConfig);
+              // pedantic is a separate 3rd argument (ConsumerCreateOptions),
+              // not a field on the consumer config itself.
+              await jsm.consumers.add(config.streamName, consumerConfig, {
+                pedantic: !!config.pedantic,
+              });
               consumer = await jsClient.consumers.get(
                 config.streamName,
                 config.consumerName
@@ -334,8 +366,29 @@ module.exports = function (RED) {
           `[STREAM CONSUMER] Fetching ${batch} messages (max wait: ${maxWait}ms)`
         );
 
+        // Pull overflow/prioritized-pull fields (group/min_pending/
+        // min_ack_pending/priority) were already reachable via a raw
+        // msg.options passthrough with zero editor support - these config
+        // fields are first-class defaults, seeded in BEFORE msg.options so
+        // an explicit msg.options value still overrides them, matching this
+        // codebase's established msg-wins-over-config precedence.
+        const pullDefaults = {};
+        if (config.pullGroup) {
+          pullDefaults.group = config.pullGroup;
+          if (config.pullMinPending)
+            pullDefaults.min_pending = parseInt(config.pullMinPending, 10);
+          if (config.pullMinAckPending)
+            pullDefaults.min_ack_pending = parseInt(
+              config.pullMinAckPending,
+              10
+            );
+          if (config.pullPriority !== undefined && config.pullPriority !== '')
+            pullDefaults.priority = parseInt(config.pullPriority, 10);
+        }
+
         // Fetch messages
         fetchTask = consumer.fetch({
+          ...pullDefaults,
           ...msg.options,
           max_messages: batch,
           expires: maxWait,
@@ -569,6 +622,11 @@ module.exports = function (RED) {
                 : config.maxAckPending
                   ? parseInt(config.maxAckPending, 10)
                   : undefined,
+              ...buildPriorityFields({
+                groups: msg.priorityGroups || config.priorityGroups,
+                policy: msg.priorityPolicy || config.priorityPolicy,
+                timeout: msg.priorityTimeout || config.priorityTimeout,
+              }),
             };
 
             // Remove undefined values
@@ -576,10 +634,20 @@ module.exports = function (RED) {
               if (consumerConfig[key] === undefined) delete consumerConfig[key];
             });
 
+            // pedantic is a separate opts arg, not a config field. msg.options
+            // is this file's existing raw-passthrough override channel (like
+            // msg.config above) - if it already sets pedantic, that wins;
+            // otherwise fall back to the msg/config convenience fields.
+            const pedantic =
+              msg.options?.pedantic !== undefined
+                ? msg.options.pedantic
+                : msg.pedantic !== undefined
+                  ? msg.pedantic
+                  : config.pedantic;
             const createdConsumer = await jsm.consumers.add(
               streamName,
               consumerConfig,
-              msg.options
+              { ...msg.options, pedantic: !!pedantic }
             );
             msg.payload = {
               operation: 'create',

@@ -126,6 +126,29 @@ module.exports = function (RED) {
         // Try to get existing stream
         try {
           const info = await jsm.streams.info(config.streamName);
+
+          // persist_mode is fixed at stream creation and can never be
+          // changed via update in either direction - confirmed against a
+          // real broker: the server rejects the attempt outright with
+          // "stream configuration update can not change persist mode",
+          // even when nothing else in the update actually differs. Unlike
+          // allow_msg_ttl/allow_msg_schedules (one-way latches) or
+          // allow_direct (freely toggleable), there is no update call that
+          // can reconcile a mismatch here, so it cannot join the
+          // auto-upgrade check below - doing so would make ensureStream()
+          // throw on every startup for any pre-existing stream whose
+          // persist_mode doesn't already match the current config.
+          if (
+            config.persistMode === 'async' &&
+            info.config.persist_mode !== 'async'
+          ) {
+            node.warn(
+              `[STREAM PUB] Stream ${config.streamName} already exists with persist_mode ` +
+                `"${info.config.persist_mode || 'default'}" - configured "async" cannot be applied ` +
+                'to an existing stream (persist_mode is fixed at creation).'
+            );
+          }
+
           if (
             (config.allowMsgTtl && !info.config.allow_msg_ttl) ||
             (config.allowMsgSchedules && !info.config.allow_msg_schedules) ||
@@ -172,6 +195,7 @@ module.exports = function (RED) {
               allow_msg_ttl: !!config.allowMsgTtl,
               allow_msg_schedules: !!config.allowMsgSchedules,
               allow_direct: !!config.allowDirect,
+              persist_mode: config.persistMode === 'async' ? 'async' : 'default',
             };
 
             await jsm.streams.add(streamConfig);
@@ -345,6 +369,8 @@ module.exports = function (RED) {
                   msg.allowDirect !== undefined
                     ? msg.allowDirect
                     : config.allowDirect || false,
+                persist_mode:
+                  msg.persistMode || config.persistMode || 'default',
                 sealed:
                   msg.sealed !== undefined
                     ? msg.sealed
@@ -412,6 +438,11 @@ module.exports = function (RED) {
               // allow_msg_ttl/allow_msg_schedules/sealed latches above), so
               // it is intentionally left to the spread's normal precedence:
               // an explicit allow_direct in msg.payload wins either way.
+              // persist_mode is neither - it is fixed at creation and the
+              // server rejects any attempt to actually change it via
+              // update (see ensureStreamImpl above), so a msg.payload that
+              // tries to change it will surface that real rejection here
+              // rather than silently failing.
               node.log(
                 `[STREAM PUB] Updating stream from payload config: ${streamConfig.name}`
               );
@@ -524,6 +555,18 @@ module.exports = function (RED) {
                     : config.allowDirect !== undefined
                       ? config.allowDirect
                       : currentStream.config.allow_direct,
+                // Unlike allow_direct just above, persist_mode is fixed at
+                // creation - the real server rejects an update that
+                // actually changes it ("stream configuration update can
+                // not change persist mode"), confirmed against a real
+                // broker. Falling back to the stream's current value keeps
+                // an unrelated property update working; a deliberate
+                // attempt to change it here still surfaces that real
+                // rejection rather than silently no-op-ing.
+                persist_mode:
+                  msg.persistMode ||
+                  config.persistMode ||
+                  currentStream.config.persist_mode,
               };
               node.log(
                 `[STREAM PUB] Updating stream from properties: ${streamConfig.name}`
@@ -727,6 +770,29 @@ module.exports = function (RED) {
           if (configSchedule) publishOptions.schedule = configSchedule;
         }
         if (msg.schedule !== undefined) publishOptions.schedule = msg.schedule;
+
+        // Optimistic-concurrency expect fields. Only "expected last-msg-ID"
+        // and "expected last-sequence" get dedicated fields per the gap
+        // plan's scope - the rest of StreamExpectations (streamName,
+        // lastSubjectSequence*) stays msg.options.expect-passthrough-only.
+        // Same fallback-only-if-still-undefined precedence as the schedule
+        // default above: an explicit msg.options.expect (already captured
+        // by the initial spread) is never clobbered by these convenience
+        // fields.
+        if (publishOptions.expect === undefined) {
+          const expectLastMsgID = msg.expectLastMsgID ?? config.expectLastMsgID;
+          const expectLastSequenceSource =
+            msg.expectLastSequence ?? config.expectLastSequence;
+          const expect = {};
+          if (expectLastMsgID) expect.lastMsgID = expectLastMsgID;
+          if (expectLastSequenceSource !== undefined && expectLastSequenceSource !== '') {
+            const parsedSequence = parseInt(expectLastSequenceSource, 10);
+            if (!Number.isNaN(parsedSequence)) {
+              expect.lastSequence = parsedSequence;
+            }
+          }
+          if (Object.keys(expect).length > 0) publishOptions.expect = expect;
+        }
 
         // @nats-io/jetstream's JetStreamPublishOptions has no
         // traceDestination field, and its publish() silently drops unknown

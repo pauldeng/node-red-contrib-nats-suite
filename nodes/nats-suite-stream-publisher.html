@@ -53,6 +53,9 @@
           return v.trim().length > 0;
         },
       },
+      expectLastMsgID: { value: '' },
+      expectLastSequence: { value: '' },
+      persistMode: { value: 'default' },
     },
     inputs: 1,
     outputs: 1,
@@ -118,6 +121,7 @@
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideDown(200);
           $('#schedule-section').slideDown(200);
+          $('#expect-section').slideDown(200);
           // Show all fields for publish
           $('.create-only').show();
           // Let createOnInit checkbox control these sections
@@ -128,6 +132,7 @@
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
           $('#schedule-section').slideUp(200);
+          $('#expect-section').slideUp(200);
           $('#stream-settings-section').slideDown(200);
           $('#stream-limits-section').slideDown(200);
           $('#stream-advanced-section').slideDown(200);
@@ -139,6 +144,7 @@
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
           $('#schedule-section').slideUp(200);
+          $('#expect-section').slideUp(200);
           $('#stream-settings-section').slideDown(200);
           $('#stream-limits-section').slideDown(200);
           $('#stream-advanced-section').slideDown(200);
@@ -148,6 +154,7 @@
           $('#stream-configuration-section').slideUp(200);
           $('#create-on-init-row').slideUp(200);
           $('#schedule-section').slideUp(200);
+          $('#expect-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -158,6 +165,7 @@
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
           $('#schedule-section').slideUp(200);
+          $('#expect-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -168,6 +176,7 @@
           $('#stream-name-config').slideDown(200);
           $('#create-on-init-row').slideUp(200);
           $('#schedule-section').slideUp(200);
+          $('#expect-section').slideUp(200);
           $('#stream-settings-section').slideUp(200);
           $('#stream-limits-section').slideUp(200);
           $('#stream-advanced-section').slideUp(200);
@@ -380,6 +389,29 @@
       </div>
     </div>
 
+    <!-- Optimistic Concurrency -->
+    <div class="nats-section" id="expect-section">
+      <div class="nats-section-header">
+        <div class="nats-section-title">
+          <i class="fa fa-shield"></i>
+          <span>Optimistic Concurrency</span>
+        </div>
+        <i class="fa fa-chevron-down nats-section-toggle"></i>
+      </div>
+      <div class="nats-section-content">
+        <div class="nats-form-row">
+          <label><i class="fa fa-hashtag"></i>Expect Last Msg ID</label>
+          <input type="text" id="node-input-expectLastMsgID" placeholder="optional">
+          <div class="form-tips">Reject the publish unless the stream's last message ID matches. Overridable via <code>msg.expectLastMsgID</code>. Only applies when nothing already set <code>msg.options.expect</code>.</div>
+        </div>
+        <div class="nats-form-row">
+          <label><i class="fa fa-list-ol"></i>Expect Last Sequence</label>
+          <input type="number" id="node-input-expectLastSequence" placeholder="optional">
+          <div class="form-tips">Reject the publish unless the stream's last sequence matches. Overridable via <code>msg.expectLastSequence</code>. Other <code>StreamExpectations</code> fields (stream name, last-subject-sequence) stay reachable only via <code>msg.options.expect</code>.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Stream Settings -->
     <div class="nats-section" id="stream-settings-section">
       <div class="nats-section-header">
@@ -540,6 +572,14 @@
             </label>
             <div class="form-tips">Enables the faster jsm.direct.getMessage() read path (used by nats-suite-stream-consumer's "Get Message" operation) instead of the always-available manager-level jsm.streams.getMessage()</div>
           </div>
+          <div class="nats-form-row create-only">
+            <label><i class="fa fa-hdd-o"></i>Persist Mode</label>
+            <select id="node-input-persistMode">
+              <option value="default">Default (sync to disk before ack)</option>
+              <option value="async">Async (higher throughput, some durability risk)</option>
+            </select>
+            <div class="form-tips">Async only takes effect on file-storage streams. Fixed at stream creation - the server rejects any later attempt to change it on an existing stream, unlike "Allow Direct" above.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -561,6 +601,10 @@ Publishes messages to a JetStream stream with persistence and acknowledgment.
 **Create Stream on initialization**: When enabled, the stream is automatically created when the node initializes or reconnects, using the configured stream settings. When disabled, the node assumes the stream already exists and will only publish messages to it - no stream configuration options are shown.
 
 **Schedule** (Publish mode only): configure a one-time (ISO date) or recurring (cron) delayed delivery without hand-building `msg.schedule`. Requires the stream's "Allow Message Schedules" option. Cron, `every`, `predefined`, and `timezone` need nats-server &ge;2.14.0; one-time `at` scheduling needs &ge;2.12.0 - an older server rejects the publish with a real error rather than silently ignoring the schedule. A message that already sets `msg.schedule` or `msg.options.schedule` always overrides these fields.
+
+**Optimistic Concurrency** (Publish mode only): "Expect Last Msg ID" and "Expect Last Sequence" reject the publish unless the stream's real state matches, without hand-building `msg.options.expect`. A message that already sets `msg.options.expect` always wins over these fields. Other `StreamExpectations` fields (expected stream name, last-subject-sequence) stay reachable only via `msg.options.expect`.
+
+**Persist Mode**: "Default" syncs to disk before acknowledging a publish (strongest durability). "Async" acknowledges before the disk sync completes, trading some durability for throughput - only takes effect on file-storage streams. Fixed at stream creation - confirmed against a real broker that the server rejects any later attempt to change it on an existing stream ("stream configuration update can not change persist mode"), unlike "Allow Direct" (freely toggleable) or "Allow Message TTL"/"Allow Message Schedules" (one-way latches) above. Set it correctly at creation time; changing it later means recreating the stream.
 
 #### Create Stream
 
@@ -599,6 +643,8 @@ Lists all available streams in the JetStream server.
 : options (object, optional) : Native `JetStreamPublishOptions`, including timeout, retries, expect, ttl, schedule, and cancelSchedule
 : schedule (object, optional) : Convenience alias for `msg.options.schedule`
 : cancelSchedule (object, optional) : Convenience alias for `msg.options.cancelSchedule`
+: expectLastMsgID (string, optional) : Reject the publish unless the stream's last message ID matches. Overrides the node's Expect Last Msg ID field
+: expectLastSequence (number, optional) : Reject the publish unless the stream's last sequence matches. Overrides the node's Expect Last Sequence field
 
 ### Inputs (Stream Operations)
 

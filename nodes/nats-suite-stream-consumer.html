@@ -20,6 +20,14 @@
       maxWait: { value: 1000 },
       operation: { value: 'consume' },
       useDirectGet: { value: false },
+      priorityGroups: { value: '' },
+      priorityPolicy: { value: 'none' },
+      priorityTimeout: { value: '' },
+      pedantic: { value: false },
+      pullGroup: { value: '' },
+      pullMinPending: { value: 0 },
+      pullMinAckPending: { value: 0 },
+      pullPriority: { value: 0 },
       dataformat: { value: 'auto', required: true },
       debug: { value: false },
     },
@@ -67,6 +75,13 @@
         }
 
         $('#get-message-config-section').toggle(op === 'get-message');
+
+        // Priority groups only apply to consumer creation; pull overflow
+        // only applies to an actual fetch - both live in one section shown
+        // whenever either path is reachable (consume auto-creates too).
+        $('#priority-overflow-section').toggle(
+          op === 'consume' || op === 'create' || op === 'add'
+        );
       }
 
       // Operation handler
@@ -86,8 +101,15 @@
         $('#start-time-row').toggle(policy === 'by_start_time');
       });
 
+      // Priority policy handler - groups/timeout only matter once a real
+      // policy is selected
+      $('#node-input-priorityPolicy').on('change', function () {
+        $('#priority-fields-row').toggle($(this).val() !== 'none');
+      });
+
       $('#node-input-operation').trigger('change');
       $('#node-input-deliverPolicy').trigger('change');
+      $('#node-input-priorityPolicy').trigger('change');
     },
   });
 </script>
@@ -301,6 +323,73 @@
       </div>
     </div>
 
+    <!-- Priority Groups & Pull Overflow -->
+    <div class="nats-section" id="priority-overflow-section">
+      <div class="nats-section-header">
+        <div class="nats-section-title">
+          <i class="fa fa-sort-amount-desc"></i>
+          <span>Priority Groups & Pull Overflow</span>
+        </div>
+        <i class="fa fa-chevron-down nats-section-toggle"></i>
+      </div>
+      <div class="nats-section-content">
+        <div class="nats-form-row">
+          <label><i class="fa fa-sitemap"></i>Priority Policy (consumer create)</label>
+          <select id="node-input-priorityPolicy">
+            <option value="none">None</option>
+            <option value="overflow">Overflow</option>
+            <option value="pinned_client">Pinned Client</option>
+            <option value="prioritized">Prioritized</option>
+          </select>
+        </div>
+        <div id="priority-fields-row">
+          <div class="nats-form-row">
+            <label><i class="fa fa-object-group"></i>Priority Groups (comma-separated)</label>
+            <input type="text" id="node-input-priorityGroups" placeholder="group-a, group-b">
+          </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-clock-o"></i>Priority Timeout</label>
+            <input type="text" id="node-input-priorityTimeout" placeholder="30s (optional)">
+          </div>
+        </div>
+        <div class="nats-checkbox-row">
+          <input type="checkbox" id="node-input-pedantic">
+          <label for="node-input-pedantic"><i class="fa fa-exclamation-triangle"></i>Pedantic (consumer create)</label>
+        </div>
+        <div class="form-tips" style="margin-bottom: 12px;">
+          Pedantic asks the server to strictly check that the consumer config
+          aligns with the stream's own settings at creation time, rejecting
+          with a real error instead of silently accepting a mismatch.
+        </div>
+        <div class="nats-grid">
+          <div class="nats-form-row">
+            <label><i class="fa fa-object-group"></i>Pull Group (fetch)</label>
+            <input type="text" id="node-input-pullGroup" placeholder="group-a (optional)">
+          </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-sort-numeric-asc"></i>Pull Priority</label>
+            <input type="number" id="node-input-pullPriority" min="0">
+          </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-hourglass-2"></i>Min Pending</label>
+            <input type="number" id="node-input-pullMinPending" min="0">
+          </div>
+          <div class="nats-form-row">
+            <label><i class="fa fa-hourglass-2"></i>Min Ack Pending</label>
+            <input type="number" id="node-input-pullMinAckPending" min="0">
+          </div>
+        </div>
+        <div class="form-tips">
+          Pull Group/Priority/Min Pending/Min Ack Pending only take effect
+          against a consumer created with a matching Priority Policy. These
+          are config-level defaults for each fetch; a message-level
+          <code>msg.options</code> (<code>group</code>/<code>priority</code>/
+          <code>min_pending</code>/<code>min_ack_pending</code>) always
+          overrides them.
+        </div>
+      </div>
+    </div>
+
     <!-- Consumer Settings -->
     <div class="nats-section" id="consumer-settings-section">
       <div class="nats-section-header">
@@ -387,6 +476,10 @@ Consumes messages from NATS JetStream with acknowledgment control.
 : seq (number, optional) : Get Message operation - retrieve by stream sequence (exactly one of `seq`/`lastBySubject` required)
 : lastBySubject (string, optional) : Get Message operation - retrieve the last message stored for this subject
 : useDirectGet (boolean, optional) : Get Message operation - overrides the "Use Direct Get" checkbox per-message
+: priorityGroups (string, optional) : Create/Add operation - comma-separated priority group names, overrides the configured field
+: priorityPolicy (string, optional) : Create/Add operation - `overflow`/`pinned_client`/`prioritized`, overrides the configured field
+: priorityTimeout (string, optional) : Create/Add operation - duration string (e.g. `30s`), overrides the configured field
+: pedantic (boolean, optional) : Create/Add operation - overrides the configured "Pedantic" checkbox; `msg.options.pedantic` wins over this if set
 
 ### Outputs
 
@@ -409,6 +502,15 @@ Direct" checkbox on `nats-suite-stream-publisher`) - the server rejects the
 request with a real error otherwise, it does not silently fall back.
 
 No matching message errors rather than returning an empty payload.
+
+### Priority Groups & Pull Overflow
+
+Priority Policy/Groups/Timeout and Pedantic apply at consumer creation
+(`priority_groups`/`priority_policy`/`priority_timeout` on `ConsumerConfig`,
+`pedantic` as a separate create-time option, not a config field). Pull
+Group/Priority/Min Pending/Min Ack Pending are per-fetch defaults for a
+consumer already created with a matching priority policy - a
+`msg.options` override always wins over these configured defaults.
 
 ### Acknowledgment
 
