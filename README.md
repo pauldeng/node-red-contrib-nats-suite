@@ -406,6 +406,8 @@ This section provides a comprehensive overview of NATS features and their implem
 | Compression | ✅ Complete | `nats-suite-kv-put` | Value compression |
 | Key History | ✅ Complete | `nats-suite-kv-get` | Access revision history with configurable limit |
 | CAS (Compare-And-Swap) | ✅ Complete | `nats-suite-kv-put` | `update` operation is revision-checked (`kv.update(key, value, revision)`) |
+| Marker TTL | ✅ Complete | `nats-suite-kv-put` | Per-call marker TTL on `create` (Go duration string), gated by a bucket-level enable flag |
+| Advanced Watch Options | ✅ Complete | `nats-suite-kv-get` | `headers_only`, `include` (last value/history/updates-only), `resumeFromRevision`, multi-key watch |
 
 #### Object Store Features
 
@@ -436,7 +438,8 @@ This section provides a comprehensive overview of NATS features and their implem
 | Service Stats | ✅ Complete | `nats-suite-service` | Metrics collection |
 | Health Monitoring | ✅ Complete | `nats-suite-service` | Connection health checks |
 | NATS Stats | ✅ Complete | `nats-suite-service` | Server/JetStream stats |
-| Service Groups | ❌ Not Implemented | - | Endpoint grouping |
+| Service Groups | ✅ Complete | `nats-suite-service` | `groupSubject`/`groupQueue` namespace endpoints under a subject prefix via `addGroup()` |
+| Reset Stats | ✅ Complete | `nats-suite-service` | `operation: reset` zeroes both the library's real per-endpoint stats and the node's local counters |
 
 #### Server Management Features
 
@@ -457,9 +460,9 @@ This section provides a comprehensive overview of NATS features and their implem
 |----------|-------------|----------------|-----------------|----------|
 | **Core NATS** | 16 | 1 | 2 | 84% |
 | **JetStream** | 20 | 5 | 0 | 80% |
-| **KV Store** | 16 | 0 | 0 | 100% |
+| **KV Store** | 18 | 0 | 0 | 100% |
 | **Object Store** | 13 | 0 | 0 | 100% |
-| **Services API** | 7 | 0 | 1 | 87% |
+| **Services API** | 9 | 0 | 0 | 100% |
 | **Server Management** | 8 | 0 | 0 | 100% |
 
 ### Legend

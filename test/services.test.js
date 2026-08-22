@@ -96,3 +96,101 @@ test('services: add with a synchronous addEndpoint, request, discover, stats, pi
     }
   }
 });
+
+// Step 8 (NATS-3.4-GAP-PLAN.md): Service.addGroup()/.reset(), exercised the
+// same way as the test above - direct @nats-io/services calls, no Node-RED
+// wrapper.
+test('services: addGroup() namespaces an endpoint under the group subject, reset() zeroes real stats', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const nc = await connectDirectNats();
+  const serviceName = `test_svc_grp_${Date.now().toString(36)}`;
+  const groupSubject = `${serviceName}.orders`;
+  const endpointName = `process_${Date.now().toString(36)}`;
+
+  try {
+    const service = await new Svcm(nc).add({
+      name: serviceName,
+      version: '1.0.0',
+      description: 'group/reset probe',
+    });
+
+    // Tracked independently of the network response: this dev broker is
+    // shared with other concurrently-running projects/sessions on this
+    // machine (confirmed via jsm.streams.list() showing unrelated streams
+    // like DAPR_EVENTS/NB_* from other work), so a bare, unnamespaced
+    // subject can get a real-looking response from something that isn't
+    // ours. Asserting "no responders" on the wire is unreliable here;
+    // asserting our own handler never fired is not.
+    let handlerCalls = 0;
+    const group = service.addGroup(groupSubject);
+    group.addEndpoint(endpointName, {
+      handler: (err, msg) => {
+        if (err) return;
+        handlerCalls++;
+        msg.respond(JSON.stringify({ echoed: JSON.parse(msg.string()) }));
+      },
+    });
+    await nc.flush();
+
+    // Reachable under the group prefix.
+    const groupedSubject = `${groupSubject}.${endpointName}`;
+    const okResponse = await nc.request(
+      groupedSubject,
+      JSON.stringify({ hello: 'grouped' }),
+      { timeout: 2000 }
+    );
+    assert.deepEqual(okResponse.json(), { echoed: { hello: 'grouped' } });
+    assert.equal(
+      handlerCalls,
+      1,
+      'the grouped request should invoke our handler exactly once'
+    );
+
+    // NOT reachable at the bare endpoint name - proves the group actually
+    // namespaces it rather than also/instead registering the bare name.
+    // Whatever else may or may not answer on this shared broker, OUR
+    // handler must not be the one that fires.
+    try {
+      await nc.request(endpointName, '{}', { timeout: 500 });
+    } catch {
+      // No responders (or someone else's responder erroring) is fine too -
+      // the only thing under test is whether *our* handler fired.
+    }
+    assert.equal(
+      handlerCalls,
+      1,
+      'the bare endpoint name must not reach our grouped handler'
+    );
+
+    const client = new Svcm(nc).client();
+    const statsBefore = [];
+    for await (const s of await client.stats(serviceName)) statsBefore.push(s);
+    assert.ok(
+      statsBefore[0].endpoints.some(e => e.num_requests >= 1),
+      'the grouped request above should be reflected in endpoint stats before reset'
+    );
+
+    service.reset();
+    await nc.flush();
+
+    const statsAfter = [];
+    for await (const s of await client.stats(serviceName)) statsAfter.push(s);
+    assert.ok(
+      statsAfter[0].endpoints.every(e => e.num_requests === 0),
+      `reset() should zero every endpoint's num_requests, got ${JSON.stringify(statsAfter[0].endpoints)}`
+    );
+
+    await service.stop();
+  } finally {
+    try {
+      await nc.close();
+    } catch {
+      // Cleanup is best-effort after the assertion result is known.
+    }
+  }
+});

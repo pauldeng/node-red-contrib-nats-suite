@@ -324,6 +324,156 @@ test('promoted service honors endpoint subjects and legacy discovery filters', a
   }
 });
 
+test('promoted service: groupSubject reachability and reset zero real stats through a deployed flow', async t => {
+  const skipReason = await ensureStackUp();
+  if (skipReason) {
+    t.skip(skipReason);
+    return;
+  }
+
+  const srv = uid('srv');
+  const serviceA = uid('servicea');
+  const serviceNameA = uid('ServiceA');
+  const groupSubject = uid('group');
+  const reply = uid('reply');
+  const statsNode = uid('statsnode');
+  const resetInject = uid('resetinject');
+  const statsInject = uid('statsinject');
+  const debug = uid('debug');
+  const groupedSubject = `${groupSubject}.process`;
+
+  const nodes = [
+    serverNode(srv),
+    {
+      id: serviceA,
+      type: 'nats-suite-service',
+      z: 'FLOW',
+      server: srv,
+      mode: 'service',
+      serviceName: serviceNameA,
+      serviceVersion: '1.0.0',
+      endpoint: 'process',
+      groupSubject,
+      autoStart: true,
+      wires: [[reply]],
+    },
+    {
+      id: reply,
+      type: 'function',
+      z: 'FLOW',
+      name: '',
+      func: 'msg.respond({ echoed: msg.payload }); return null;',
+      outputs: 0,
+      noerr: 0,
+      initialize: '',
+      finalize: '',
+      libs: [],
+      wires: [],
+    },
+    {
+      id: statsNode,
+      type: 'nats-suite-service',
+      z: 'FLOW',
+      server: srv,
+      mode: 'discover',
+      serviceName: serviceNameA,
+      autoStart: false,
+      wires: [[debug]],
+    },
+    {
+      id: resetInject,
+      type: 'inject',
+      z: 'FLOW',
+      props: [{ p: 'operation', v: 'reset', vt: 'str' }],
+      repeat: '',
+      once: false,
+      payload: '',
+      payloadType: 'date',
+      wires: [[serviceA]],
+    },
+    {
+      id: statsInject,
+      type: 'inject',
+      z: 'FLOW',
+      props: [{ p: 'operation', v: 'stats', vt: 'str' }],
+      repeat: '',
+      once: false,
+      payload: '',
+      payloadType: 'date',
+      wires: [[statsNode]],
+    },
+    {
+      id: debug,
+      type: 'debug',
+      z: 'FLOW',
+      active: true,
+      tosidebar: true,
+      console: false,
+      complete: 'true',
+      wires: [],
+    },
+  ];
+
+  const comms = connectComms();
+  let nc;
+  let flowId;
+  try {
+    await comms.ready;
+    nc = await connectDirectNats();
+    const serverReady = comms.waitForStatus(
+      srv,
+      status => status.fill === 'green',
+      20000
+    );
+    const serviceReady = comms.waitForStatus(
+      serviceA,
+      status => status.text?.includes('(running)'),
+      20000
+    );
+
+    flowId = await deployFlow(nodes);
+    await serverReady;
+    await serviceReady;
+
+    // groupSubject reachability: the endpoint only answers under the
+    // group's prefix, proven by a real request landing there.
+    const payload = { hello: 'group' };
+    for (let i = 0; i < 3; i++) {
+      const response = await nc.request(
+        groupedSubject,
+        JSON.stringify(payload),
+        { timeout: 5000 }
+      );
+      assert.deepEqual(response.json(), { echoed: payload });
+    }
+
+    const beforeReset = comms.waitForDebug(debug, 10000);
+    await triggerInject(statsInject);
+    const beforeStats = await beforeReset;
+    const beforeEndpoint = beforeStats.payload[0]?.endpoints?.[0];
+    assert.ok(
+      beforeEndpoint && beforeEndpoint.num_requests >= 3,
+      `expected at least 3 real requests recorded before reset, got ${JSON.stringify(beforeEndpoint)}`
+    );
+
+    await triggerInject(resetInject);
+
+    const afterReset = comms.waitForDebug(debug, 10000);
+    await triggerInject(statsInject);
+    const afterStats = await afterReset;
+    const afterEndpoint = afterStats.payload[0]?.endpoints?.[0];
+    assert.equal(
+      afterEndpoint?.num_requests,
+      0,
+      `expected num_requests to be zeroed by a real reset through the deployed node, got ${JSON.stringify(afterEndpoint)}`
+    );
+  } finally {
+    await removeFlow(flowId);
+    comms.close();
+    await closeNats(nc);
+  }
+});
+
 function bucketCreateFlow(type, server, bucket) {
   const put = uid('put');
   const inject = uid('inject');

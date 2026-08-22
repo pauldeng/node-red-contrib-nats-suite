@@ -15,6 +15,8 @@
       serviceDescription: { value: '' },
       endpoint: { value: 'process' },
       endpointSubject: { value: '' },
+      groupSubject: { value: '' },
+      groupQueue: { value: '' },
       queueGroup: { value: '' },
       metadata: { value: '' },
       autoStart: { value: true },
@@ -197,7 +199,16 @@
       <label for="node-input-endpointSubject"><i class="fa fa-paper-plane"></i> Subject (optional)</label>
       <input type="text" id="node-input-endpointSubject" placeholder="my-service.process" style="width:70%">
     </div>
-    <div class="form-row form-tips">Default: serviceName.endpoint</div>
+    <div class="form-row form-tips">Default: serviceName.endpoint (or just endpoint, if a Group Subject below is set - the group already provides the prefix)</div>
+    <div class="form-row">
+      <label for="node-input-groupSubject"><i class="fa fa-object-group"></i> Group Subject (optional)</label>
+      <input type="text" id="node-input-groupSubject" placeholder="orders" style="width:70%">
+    </div>
+    <div class="form-row">
+      <label for="node-input-groupQueue"><i class="fa fa-users"></i> Group Queue (optional)</label>
+      <input type="text" id="node-input-groupQueue" placeholder="defaults to the group's parent queue" style="width:70%">
+    </div>
+    <div class="form-row form-tips">When set, the endpoint is added under this subject group instead of directly on the service - its final subject becomes <code>groupSubject.subject</code>, not reachable at the bare subject alone.</div>
     <div class="form-row">
       <label for="node-input-queueGroup"><i class="fa fa-users"></i> Queue Group</label>
       <input type="text" id="node-input-queueGroup" placeholder="my-service" style="width:70%">
@@ -321,6 +332,7 @@ Send `msg.operation` to trigger:
  - `ping` - ping services
  - `start` - start service
  - `stop` - stop service
+ - `reset` - reset the running service's stats (requests/errors/processing-time counters, both the library's own and this node's local status counters) - only valid while the service is running
  - `health` - run health check
  - `nats-stats` - get NATS statistics (use `msg.statsType`)
 </script>

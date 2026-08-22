@@ -105,9 +105,25 @@ module.exports = function (RED) {
         service = await new Svcm(nc).add(serviceConfig);
         if (closing) throw new Error('Service node is closing');
 
-        // Add endpoint
+        // Add endpoint, optionally under a group. A ServiceGroup always
+        // prefixes whatever subject it's given with its own subject
+        // (ServiceGroupImpl.calcSubject: `${root}.${name}`) - passing the
+        // same absolute `${serviceName}.${endpoint}` default used below
+        // would double up under a group, so the default becomes just the
+        // bare endpoint name when grouped and lets the group supply the
+        // prefix. An explicit endpointSubject override still applies in
+        // either case; it's just the group that decides what it's relative
+        // to.
         const endpoint = config.endpoint || 'process';
-        const subject = config.endpointSubject || `${serviceName}.${endpoint}`;
+        const endpointTarget = config.groupSubject
+          ? service.addGroup(config.groupSubject, config.groupQueue || undefined)
+          : service;
+        const subject =
+          config.endpointSubject ||
+          (config.groupSubject ? endpoint : `${serviceName}.${endpoint}`);
+        const effectiveSubject = config.groupSubject
+          ? `${config.groupSubject}.${subject}`
+          : subject;
 
         const endpointHandler = async (err, msg) => {
           const startTime = Date.now();
@@ -211,16 +227,17 @@ module.exports = function (RED) {
           }
         };
 
-        // Add endpoint to service. addEndpoint() is synchronous - it returns
-        // a QueuedIterator<ServiceMsg>, not a Promise.
-        service.addEndpoint(endpoint, {
+        // Add endpoint to the service (or group). addEndpoint() is
+        // synchronous - it returns a QueuedIterator<ServiceMsg>, not a
+        // Promise.
+        endpointTarget.addEndpoint(endpoint, {
           subject,
           handler: endpointHandler,
         });
         isServiceRunning = true;
 
         node.log(`[SERVICE] Service started: ${serviceName} v${version}`);
-        node.log(`[SERVICE] Endpoint: ${subject}`);
+        node.log(`[SERVICE] Endpoint: ${effectiveSubject}`);
         node.status({
           fill: 'green',
           shape: 'dot',
@@ -786,6 +803,35 @@ module.exports = function (RED) {
               success: true,
               running: isServiceRunning,
             };
+            send(msg);
+            done();
+            return;
+          }
+
+          if (operation === 'reset') {
+            if (!service) {
+              done(new Error('Cannot reset - service is not running'));
+              return;
+            }
+            // service.reset() only clears the library's own per-endpoint
+            // stats (what the 'stats' operation queries over the network).
+            // This node also keeps its own local counters for status-text
+            // painting - reset those too, or the status dot would keep
+            // showing a stale request count while a network stats query
+            // already reports zero.
+            service.reset();
+            serviceStats = {
+              requests: 0,
+              errors: 0,
+              avgProcessingTime: 0,
+              lastRequest: null,
+            };
+            msg.payload = { operation: 'reset', success: true };
+            node.status({
+              fill: 'green',
+              shape: 'dot',
+              text: `${config.serviceName || 'default-service'} (running)`,
+            });
             send(msg);
             done();
             return;

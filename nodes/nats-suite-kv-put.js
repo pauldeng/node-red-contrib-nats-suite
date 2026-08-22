@@ -21,6 +21,7 @@ module.exports = function (RED) {
     this.compression = !!config.compression;
     this.replicas = parseInt(config.replicas) || 1;
     this.storage = config.storage || 'file';
+    this.bucketMarkerTTL = parseInt(config.bucketMarkerTTL) || 0;
 
     let kvStore = null;
     let statusTimer = null;
@@ -41,6 +42,7 @@ module.exports = function (RED) {
         compression: node.compression,
         replicas: node.replicas,
         storage: node.storage === 'memory' ? 'memory' : 'file',
+        markerTTL: node.bucketMarkerTTL || undefined,
       };
 
       Object.keys(createOptions).forEach(key => {
@@ -99,6 +101,9 @@ module.exports = function (RED) {
                 : node.replicas || 1,
               storage:
                 (msg.storage || node.storage) === 'memory' ? 'memory' : 'file',
+              markerTTL: msg.bucketMarkerTTL
+                ? parseInt(msg.bucketMarkerTTL, 10)
+                : node.bucketMarkerTTL || undefined,
             };
 
             Object.keys(createOptions).forEach(key => {
@@ -127,6 +132,7 @@ module.exports = function (RED) {
               bucket: bucketName,
               values: status.values || 0,
               bytes: status.size || 0,
+              markerTTL: status.markerTTL || 0,
             };
             node.status({ fill: 'green', shape: 'dot', text: bucketName });
             break;
@@ -289,10 +295,15 @@ module.exports = function (RED) {
 
             const preparedValue = prepareValue(value);
 
-            // Note: TTL is only supported at bucket level, not per-key
-            // Individual key TTL is not supported by NATS KV Store
+            // markerTTL here is a per-create-call Go duration string
+            // ("10s"/"1m"/"1h") - a different thing from the bucket-level
+            // markerTTL (a plain millisecond number set at bucket creation,
+            // which must be non-zero first or the server rejects this with
+            // "per-message TTL is disabled", confirmed against a real broker).
+            const markerTTL = msg.markerTTL || config.createMarkerTTL || undefined;
+
             try {
-              const revision = await kv.create(key, preparedValue);
+              const revision = await kv.create(key, preparedValue, markerTTL);
 
               if (isDebug) {
                 node.log(

@@ -164,11 +164,32 @@ module.exports = function (RED) {
       // Determine watch options
       const watchOptions = {};
       if (config.watchPattern) {
-        watchOptions.key = config.watchPattern;
+        // A comma-separated pattern becomes a real multi-key watch (server
+        // 2.10+); a single pattern keeps working exactly as before.
+        const keys = config.watchPattern
+          .split(',')
+          .map(k => k.trim())
+          .filter(Boolean);
+        watchOptions.key = keys.length > 1 ? keys : keys[0];
       }
 
       if (config.ignoreDeletes) {
         watchOptions.ignoreDeletes = true;
+      }
+
+      if (config.watchHeadersOnly) {
+        watchOptions.headers_only = true;
+      }
+
+      if (config.watchInclude) {
+        watchOptions.include = config.watchInclude;
+      }
+
+      if (config.watchResumeFromRevision) {
+        watchOptions.resumeFromRevision = parseInt(
+          config.watchResumeFromRevision,
+          10
+        );
       }
 
       watcher = await kv.watch(watchOptions);
@@ -190,7 +211,13 @@ module.exports = function (RED) {
           for await (const entry of activeWatcher) {
             if (!isWatching) break;
 
-            const value = entry.value ? entry.string() : null;
+            // With headers_only, entry.value is a truthy-but-empty Buffer -
+            // entry.value.length (the real buffer) is 0 even though
+            // entry.length (metadata) still reports the real byte count.
+            // Check the buffer itself, not the metadata field, or
+            // entry.string() returns '' instead of "we stripped this".
+            const value =
+              entry.value && entry.value.length > 0 ? entry.string() : null;
             const parsedValue = value !== null ? parseValue(value) : null;
 
             const msg = {
@@ -198,6 +225,7 @@ module.exports = function (RED) {
               key: entry.key,
               operation: entry.operation,
               revision: entry.revision,
+              length: entry.length,
               created: entry.created
                 ? new Date(entry.created).toISOString()
                 : null,
